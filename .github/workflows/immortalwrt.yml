@@ -75,26 +75,20 @@ jobs:
     - name: Checkout
       uses: actions/checkout@main
 
-    # - name: Clone Source Code
-    #   id: clone
-    #   run: |
-    #     df -hT $GITHUB_WORKSPACE
-    #     git clone $REPO_URL -b $REPO_BRANCH openwrt
-    #     cd openwrt
-    #     echo "OPENWRT_PATH=$PWD" >> $GITHUB_ENV
-    #     COMMIT_AUTHOR=$(git show -s --date=short --format="作者: %an")
-    #     echo "COMMIT_AUTHOR=$COMMIT_AUTHOR" >> $GITHUB_ENV
-    #     echo "COMMIT_AUTHOR=$COMMIT_AUTHOR" >> $GITHUB_OUTPUT
-    #     COMMIT_DATE=$(git show -s --date=short --format="时间: %ci")
-    #     echo "COMMIT_DATE=$COMMIT_DATE" >> $GITHUB_ENV
-    #     echo "COMMIT_DATE=$COMMIT_DATE" >> $GITHUB_OUTPUT
-    #     COMMIT_MESSAGE=$(git show -s --date=short --format="内容: %s")
-    #     echo "COMMIT_MESSAGE=$COMMIT_MESSAGE" >> $GITHUB_ENV
-    #     echo "COMMIT_MESSAGE=$COMMIT_MESSAGE" >> $GITHUB_OUTPUT
-    #     COMMIT_HASH=$(git show -s --date=short --format="hash: %H")
-    #     echo "COMMIT_HASH=$COMMIT_HASH" >> $GITHUB_ENV
-    #     echo "COMMIT_HASH=$COMMIT_HASH" >> $GITHUB_OUTPUT
-        
+  
+    - name: Check and Remount /mnt
+      run: |
+        # 查看当前挂载情况
+        mount | grep /mnt
+        # 若未挂载到/dev/sda1，强制重新挂载
+        if ! mount | grep /mnt | grep -q /dev/sda1; then
+          sudo umount /mnt || true
+          sudo mount /dev/sda1 /mnt
+          echo "已将/dev/sda1重新挂载到/mnt"
+        fi
+        # 再次验证空间
+        df -hT /mnt
+    
     - name: Clone Source Code to /mnt
       id: clone
       run: |
