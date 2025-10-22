@@ -67,6 +67,9 @@ jobs:
         swap-size-mb: 1024
         temp-reserve-mb: 100
         root-reserve-mb: 1024
+        remove-dotnet: true
+        remove-android: true
+        remove-haskell: true
 
     - name: Checkout
       uses: actions/checkout@main
@@ -94,14 +97,18 @@ jobs:
     - name: Clone Source Code to /mnt
       id: clone
       run: |
-        # 确保/mnt目录有读写权限
-        sudo chmod 777 /mnt
-        # 克隆源码到/mnt/openwrt目录
+        # 彻底清理/mnt目录，释放空间（谨慎使用，确保无重要文件）
+        sudo rm -rf /mnt/*
+        # 赋予/mnt完全权限（包括子目录继承）
+        sudo chmod -R 777 /mnt
+        # 验证/mnt空间（关键！确认可用空间充足）
+        echo "当前/mnt空间情况："
+        df -hT /mnt
+        # 克隆源码到/mnt/openwrt
         git clone $REPO_URL -b $REPO_BRANCH /mnt/openwrt
         cd /mnt/openwrt
-        # 设置OPENWRT_PATH环境变量为/mnt/openwrt
         echo "OPENWRT_PATH=$PWD" >> $GITHUB_ENV
-        # 提取提交信息
+        # 提取提交信息（保持不变）
         COMMIT_AUTHOR=$(git show -s --date=short --format="作者: %an")
         echo "COMMIT_AUTHOR=$COMMIT_AUTHOR" >> $GITHUB_ENV
         echo "COMMIT_AUTHOR=$COMMIT_AUTHOR" >> $GITHUB_OUTPUT
@@ -114,9 +121,6 @@ jobs:
         COMMIT_HASH=$(git show -s --date=short --format="hash: %H")
         echo "COMMIT_HASH=$COMMIT_HASH" >> $GITHUB_ENV
         echo "COMMIT_HASH=$COMMIT_HASH" >> $GITHUB_OUTPUT
-        # 显示/mnt目录空间使用情况（验证是否成功使用/mnt）
-        echo -e "\n/mnt目录空间使用情况："
-        df -hT /mnt
     
     - name: Generate Variables
       id: variable
