@@ -98,14 +98,21 @@ jobs:
     - name: Clone Source Code to /mnt
       id: clone
       run: |
-        # 彻底清理/mnt目录，释放空间（谨慎使用，确保无重要文件）
+        # 关键：彻底清理/mnt下所有文件（释放空间）
         sudo rm -rf /mnt/*
-        # 赋予/mnt完全权限（包括子目录继承）
+        # 再次确认权限
         sudo chmod -R 777 /mnt
-        # 验证/mnt空间（关键！确认可用空间充足）
-        echo "当前/mnt空间情况："
+        # 强制刷新磁盘空间统计
+        sync && sudo sysctl -p
+        # 验证/mnt可用空间（必须确保剩余空间 > 40G）
+        echo "=== 当前/mnt空间情况 ==="
         df -hT /mnt
-        # 克隆源码到/mnt/openwrt
+        # 若剩余空间 < 40G，立即报错终止（避免后续失败）
+        if [ $(df -P /mnt | tail -1 | awk '{print $4}') -lt 40000000 ]; then
+          echo "错误：/mnt可用空间不足40G，无法继续编译"
+          exit 1
+        fi
+        # 克隆源码
         git clone $REPO_URL -b $REPO_BRANCH /mnt/openwrt
         cd /mnt/openwrt
         echo "OPENWRT_PATH=$PWD" >> $GITHUB_ENV
