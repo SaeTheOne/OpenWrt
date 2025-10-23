@@ -90,35 +90,35 @@ jobs:
         df -hT /mnt
     
     - name: Clone Source Code to /mnt/openwrt_build
-  id: clone
-  run: |
-    # 1. 在/mnt下创建独立编译目录（不触碰系统目录）
-    mkdir -p /mnt/openwrt_build
-    sudo chmod -R 777 /mnt/openwrt_build  # 赋予完全权限
-    # 2. 验证空间（确保/mnt有足够空间）
-    echo "=== 当前/mnt空间情况 ==="
-    df -hT /mnt
-    if [ $(df -P /mnt | tail -1 | awk '{print $4}') -lt 40000000 ]; then
-      echo "错误：/mnt可用空间不足40G，无法继续编译"
-      exit 1
-    fi
-    # 3. 克隆源码到独立目录
-    git clone $REPO_URL -b $REPO_BRANCH /mnt/openwrt_build/openwrt
-    cd /mnt/openwrt_build/openwrt
-    echo "OPENWRT_PATH=$PWD" >> $GITHUB_ENV  # 后续步骤用此路径
-    # 4. 提取提交信息（保持不变）
-    COMMIT_AUTHOR=$(git show -s --date=short --format="作者: %an")
-    echo "COMMIT_AUTHOR=$COMMIT_AUTHOR" >> $GITHUB_ENV
-    echo "COMMIT_AUTHOR=$COMMIT_AUTHOR" >> $GITHUB_OUTPUT
-    COMMIT_DATE=$(git show -s --date=short --format="时间: %ci")
-    echo "COMMIT_DATE=$COMMIT_DATE" >> $GITHUB_ENV
-    echo "COMMIT_DATE=$COMMIT_DATE" >> $GITHUB_OUTPUT
-    COMMIT_MESSAGE=$(git show -s --date=short --format="内容: %s")
-    echo "COMMIT_MESSAGE=$COMMIT_MESSAGE" >> $GITHUB_ENV
-    echo "COMMIT_MESSAGE=$COMMIT_MESSAGE" >> $GITHUB_OUTPUT
-    COMMIT_HASH=$(git show -s --date=short --format="hash: %H")
-    echo "COMMIT_HASH=$COMMIT_HASH" >> $GITHUB_ENV
-    echo "COMMIT_HASH=$COMMIT_HASH" >> $GITHUB_OUTPUT
+      id: clone
+      run: |
+        # 1. 在/mnt下创建独立编译目录（不触碰系统目录）
+        mkdir -p /mnt/openwrt_build
+        sudo chmod -R 777 /mnt/openwrt_build  # 赋予完全权限
+        # 2. 验证空间（确保/mnt有足够空间）
+        echo "=== 当前/mnt空间情况 ==="
+        df -hT /mnt
+        if [ $(df -P /mnt | tail -1 | awk '{print $4}') -lt 40000000 ]; then
+          echo "错误：/mnt可用空间不足40G，无法继续编译"
+          exit 1
+        fi
+        # 3. 克隆源码到独立目录
+        git clone $REPO_URL -b $REPO_BRANCH /mnt/openwrt_build/openwrt
+        cd /mnt/openwrt_build/openwrt
+        echo "OPENWRT_PATH=$PWD" >> $GITHUB_ENV  # 后续步骤用此路径
+        # 4. 提取提交信息（保持不变）
+        COMMIT_AUTHOR=$(git show -s --date=short --format="作者: %an")
+        echo "COMMIT_AUTHOR=$COMMIT_AUTHOR" >> $GITHUB_ENV
+        echo "COMMIT_AUTHOR=$COMMIT_AUTHOR" >> $GITHUB_OUTPUT
+        COMMIT_DATE=$(git show -s --date=short --format="时间: %ci")
+        echo "COMMIT_DATE=$COMMIT_DATE" >> $GITHUB_ENV
+        echo "COMMIT_DATE=$COMMIT_DATE" >> $GITHUB_OUTPUT
+        COMMIT_MESSAGE=$(git show -s --date=short --format="内容: %s")
+        echo "COMMIT_MESSAGE=$COMMIT_MESSAGE" >> $GITHUB_ENV
+        echo "COMMIT_MESSAGE=$COMMIT_MESSAGE" >> $GITHUB_OUTPUT
+        COMMIT_HASH=$(git show -s --date=short --format="hash: %H")
+        echo "COMMIT_HASH=$COMMIT_HASH" >> $GITHUB_ENV
+        echo "COMMIT_HASH=$COMMIT_HASH" >> $GITHUB_OUTPUT
 
     - name: Verify Compile Directory
       run: |
