@@ -1,11 +1,10 @@
 #!/bin/bash
 
-# 确保编译目录为/mnt/openwrt，设置权限
-OPENWRT_DIR="/mnt/openwrt"
+
+OPENWRT_DIR="/mnt/openwrt_build/openwrt"
 PACKAGE_DIR="${OPENWRT_DIR}/package"
 mkdir -p ${PACKAGE_DIR}
-sudo chmod -R 777 ${OPENWRT_DIR}  # 解决权限问题
-cd ${OPENWRT_DIR} || exit  # 切换到OpenWrt源码根目录
+cd ${OPENWRT_DIR} || exit  # 切换到正确的源码目录
 
 # 修改默认IP（按需启用）
 # sed -i 's/192.168.1.1/10.0.0.1/g' package/base-files/files/bin/config_generate
