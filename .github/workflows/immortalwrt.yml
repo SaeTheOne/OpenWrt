@@ -117,13 +117,14 @@ jobs:
         echo "=== 源码目录权限验证 ==="
         ls -ld /home/runner/work/OpenWrt/OpenWrt/openwrt
 
-    - name: Verify Compile Directory
-      run: |
-        echo "OpenWrt 源码路径：$OPENWRT_PATH"
-        echo "=== /mnt 目录结构（仅显示一级目录）==="
-        ls -l /mnt
-        echo "=== /mnt/openwrt_build 目录权限 ==="
-        ls -ld /mnt/openwrt_build
+      - name: Verify Compile Directory
+        run: |
+          echo "OpenWrt 源码路径：$OPENWRT_PATH"
+          # 只验证工作目录下的源码目录（已切换到工作目录，无需管/mnt）
+          echo "=== 工作目录下源码目录权限 ==="
+          ls -ld $OPENWRT_PATH
+          echo "=== 工作目录空间情况 ==="
+          df -hT $OPENWRT_PATH
     
 
     - name: Verify /mnt Space and Permissions  # 新增此步骤（调试用）
