@@ -188,7 +188,32 @@ jobs:
         cd $OPENWRT_PATH
         ./scripts/feeds update -a
         ./scripts/feeds install -a
-
+        
+    - name: Install Rust Feeds for SmartDNS
+      run: |
+        cd $OPENWRT_PATH
+        # 1. 更新 packages feeds（确保包含 rust 相关包）
+        ./scripts/feeds update packages
+        # 2. 安装 Rust 核心依赖（生成 rust-package.mk）
+        ./scripts/feeds install -p packages rust rustc cargo
+        # 3. 关键：查找 rust-package.mk 位置，验证是否存在
+        echo "=== 查找 rust-package.mk 文件 ==="
+        find $OPENWRT_PATH -name rust-package.mk
+        # 4. 检查文件是否存在，不存在则报错终止
+        RUST_MK_PATH=$(find $OPENWRT_PATH -name rust-package.mk | head -1)
+        if [ -z "$RUST_MK_PATH" ]; then
+          echo "错误：未找到 rust-package.mk，Rust feeds 安装失败！"
+          exit 1
+        else
+          echo "成功找到 rust-package.mk，路径：$RUST_MK_PATH"
+          # 可选：验证路径是否与 smartdns 依赖匹配（避免路径错误）
+          if [[ "$RUST_MK_PATH" != *"feeds/packages/lang/rust"* ]]; then
+            echo "警告：rust-package.mk 路径与预期不符，可能需要调整 smartdns Makefile"
+            echo "当前路径：$RUST_MK_PATH"
+            echo "预期路径：feeds/packages/lang/rust/rust-package.mk"
+          fi
+        fi
+    
     - name: Load Custom Configuration
       run: |
         [ -e files ] && mv files $OPENWRT_PATH/files
