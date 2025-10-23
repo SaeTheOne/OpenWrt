@@ -89,31 +89,18 @@ jobs:
         # 再次验证空间
         df -hT /mnt
     
-    - name: Clone Source Code to /mnt/openwrt_build
+    - name: Clone Source Code to Workspace
       id: clone
       run: |
-        # 1. 首先修复/mnt目录的所有者和权限（关键！解决Permission denied）
-        sudo chown -R runner:runner /mnt  # 将/mnt所有者改为当前运行用户（runner）
-        sudo chmod -R 777 /mnt           # 赋予/mnt完全读写执行权限
-        # 2. 验证权限是否生效
-        echo "=== /mnt 目录权限验证 ==="
-        ls -ld /mnt  # 查看权限，应显示 drwxrwxrwx 或 runner:runner
-        # 3. 创建独立编译目录（此时不会报权限错误）
-        mkdir -p /mnt/openwrt_build
-        # 4. 再次确认子目录权限
-        sudo chmod -R 777 /mnt/openwrt_build
-        # 5. 验证/mnt可用空间（确保足够）
-        echo "=== 当前/mnt空间情况 ==="
-        df -hT /mnt
-        if [ $(df -P /mnt | tail -1 | awk '{print $4}') -lt 40000000 ]; then
-          echo "错误：/mnt可用空间不足40G，无法继续编译"
-          exit 1
-        fi
-        # 6. 克隆源码到独立目录
-        git clone $REPO_URL -b $REPO_BRANCH /mnt/openwrt_build/openwrt
-        cd /mnt/openwrt_build/openwrt
+        # 1. 验证工作目录空间（确保108G空闲可用）
+        echo "=== 当前工作目录空间情况 ==="
+        df -hT /home/runner/work/OpenWrt/OpenWrt
+        # 2. 克隆源码到工作目录（避免/mnt空间不足）
+        git clone $REPO_URL -b $REPO_BRANCH /home/runner/work/OpenWrt/OpenWrt/openwrt
+        cd /home/runner/work/OpenWrt/OpenWrt/openwrt
+        # 3. 设置OPENWRT_PATH环境变量（后续步骤依赖此路径）
         echo "OPENWRT_PATH=$PWD" >> $GITHUB_ENV
-        # 7. 提取提交信息（保持不变）
+        # 4. 提取提交信息（保持不变）
         COMMIT_AUTHOR=$(git show -s --date=short --format="作者: %an")
         echo "COMMIT_AUTHOR=$COMMIT_AUTHOR" >> $GITHUB_ENV
         echo "COMMIT_AUTHOR=$COMMIT_AUTHOR" >> $GITHUB_OUTPUT
@@ -126,6 +113,9 @@ jobs:
         COMMIT_HASH=$(git show -s --date=short --format="hash: %H")
         echo "COMMIT_HASH=$COMMIT_HASH" >> $GITHUB_ENV
         echo "COMMIT_HASH=$COMMIT_HASH" >> $GITHUB_OUTPUT
+        # 5. 验证源码目录权限（确保可读写）
+        echo "=== 源码目录权限验证 ==="
+        ls -ld /home/runner/work/OpenWrt/OpenWrt/openwrt
 
     - name: Verify Compile Directory
       run: |
