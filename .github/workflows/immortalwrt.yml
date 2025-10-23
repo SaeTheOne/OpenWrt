@@ -89,40 +89,45 @@ jobs:
         # 再次验证空间
         df -hT /mnt
     
-    - name: Clone Source Code to /mnt
-      id: clone
+    - name: Clone Source Code to /mnt/openwrt_build
+  id: clone
+  run: |
+    # 1. 在/mnt下创建独立编译目录（不触碰系统目录）
+    mkdir -p /mnt/openwrt_build
+    sudo chmod -R 777 /mnt/openwrt_build  # 赋予完全权限
+    # 2. 验证空间（确保/mnt有足够空间）
+    echo "=== 当前/mnt空间情况 ==="
+    df -hT /mnt
+    if [ $(df -P /mnt | tail -1 | awk '{print $4}') -lt 40000000 ]; then
+      echo "错误：/mnt可用空间不足40G，无法继续编译"
+      exit 1
+    fi
+    # 3. 克隆源码到独立目录
+    git clone $REPO_URL -b $REPO_BRANCH /mnt/openwrt_build/openwrt
+    cd /mnt/openwrt_build/openwrt
+    echo "OPENWRT_PATH=$PWD" >> $GITHUB_ENV  # 后续步骤用此路径
+    # 4. 提取提交信息（保持不变）
+    COMMIT_AUTHOR=$(git show -s --date=short --format="作者: %an")
+    echo "COMMIT_AUTHOR=$COMMIT_AUTHOR" >> $GITHUB_ENV
+    echo "COMMIT_AUTHOR=$COMMIT_AUTHOR" >> $GITHUB_OUTPUT
+    COMMIT_DATE=$(git show -s --date=short --format="时间: %ci")
+    echo "COMMIT_DATE=$COMMIT_DATE" >> $GITHUB_ENV
+    echo "COMMIT_DATE=$COMMIT_DATE" >> $GITHUB_OUTPUT
+    COMMIT_MESSAGE=$(git show -s --date=short --format="内容: %s")
+    echo "COMMIT_MESSAGE=$COMMIT_MESSAGE" >> $GITHUB_ENV
+    echo "COMMIT_MESSAGE=$COMMIT_MESSAGE" >> $GITHUB_OUTPUT
+    COMMIT_HASH=$(git show -s --date=short --format="hash: %H")
+    echo "COMMIT_HASH=$COMMIT_HASH" >> $GITHUB_ENV
+    echo "COMMIT_HASH=$COMMIT_HASH" >> $GITHUB_OUTPUT
+
+    - name: Verify Compile Directory
       run: |
-        # 关键：彻底清理/mnt下所有文件（释放空间）
-        sudo rm -rf /mnt/*
-        # 再次确认权限
-        sudo chmod -R 777 /mnt
-        # 强制刷新磁盘空间统计
-        sync && sudo sysctl -p
-        # 验证/mnt可用空间（必须确保剩余空间 > 40G）
-        echo "=== 当前/mnt空间情况 ==="
-        df -hT /mnt
-        # 若剩余空间 < 40G，立即报错终止（避免后续失败）
-        if [ $(df -P /mnt | tail -1 | awk '{print $4}') -lt 40000000 ]; then
-          echo "错误：/mnt可用空间不足40G，无法继续编译"
-          exit 1
-        fi
-        # 克隆源码
-        git clone $REPO_URL -b $REPO_BRANCH /mnt/openwrt
-        cd /mnt/openwrt
-        echo "OPENWRT_PATH=$PWD" >> $GITHUB_ENV
-        # 提取提交信息（保持不变）
-        COMMIT_AUTHOR=$(git show -s --date=short --format="作者: %an")
-        echo "COMMIT_AUTHOR=$COMMIT_AUTHOR" >> $GITHUB_ENV
-        echo "COMMIT_AUTHOR=$COMMIT_AUTHOR" >> $GITHUB_OUTPUT
-        COMMIT_DATE=$(git show -s --date=short --format="时间: %ci")
-        echo "COMMIT_DATE=$COMMIT_DATE" >> $GITHUB_ENV
-        echo "COMMIT_DATE=$COMMIT_DATE" >> $GITHUB_OUTPUT
-        COMMIT_MESSAGE=$(git show -s --date=short --format="内容: %s")
-        echo "COMMIT_MESSAGE=$COMMIT_MESSAGE" >> $GITHUB_ENV
-        echo "COMMIT_MESSAGE=$COMMIT_MESSAGE" >> $GITHUB_OUTPUT
-        COMMIT_HASH=$(git show -s --date=short --format="hash: %H")
-        echo "COMMIT_HASH=$COMMIT_HASH" >> $GITHUB_ENV
-        echo "COMMIT_HASH=$COMMIT_HASH" >> $GITHUB_OUTPUT
+        echo "OpenWrt 源码路径：$OPENWRT_PATH"
+        echo "=== /mnt 目录结构（仅显示一级目录）==="
+        ls -l /mnt
+        echo "=== /mnt/openwrt_build 目录权限 ==="
+        ls -ld /mnt/openwrt_build
+    
 
     - name: Verify /mnt Space and Permissions  # 新增此步骤（调试用）
       run: |
