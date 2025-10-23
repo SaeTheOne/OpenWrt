@@ -189,30 +189,72 @@ jobs:
         ./scripts/feeds update -a
         ./scripts/feeds install -a
         
-    - name: Install Rust Feeds for SmartDNS
+# 解决 smartdns 依赖 rust-package.mk 路径问题的完整流程
+    - name: Step 1 Install Rust Feeds for SmartDNS
       run: |
         cd $OPENWRT_PATH
-        # 1. 更新 packages feeds（确保包含 rust 相关包）
+        # 1. 更新 packages feeds，确保包含 rust 相关包
         ./scripts/feeds update packages
         # 2. 安装 Rust 核心依赖（生成 rust-package.mk）
         ./scripts/feeds install -p packages rust rustc cargo
-        # 3. 关键：查找 rust-package.mk 位置，验证是否存在
-        echo "=== 查找 rust-package.mk 文件 ==="
-        find $OPENWRT_PATH -name rust-package.mk
-        # 4. 检查文件是否存在，不存在则报错终止
-        RUST_MK_PATH=$(find $OPENWRT_PATH -name rust-package.mk | head -1)
-        if [ -z "$RUST_MK_PATH" ]; then
-          echo "错误：未找到 rust-package.mk，Rust feeds 安装失败！"
+        # 3. 验证 rust 目录是否存在
+        if [ ! -d "feeds/packages/lang/rust" ]; then
+          echo "错误：Rust feeds 安装失败，未找到 feeds/packages/lang/rust"
           exit 1
-        else
-          echo "成功找到 rust-package.mk，路径：$RUST_MK_PATH"
-          # 可选：验证路径是否与 smartdns 依赖匹配（避免路径错误）
-          if [[ "$RUST_MK_PATH" != *"feeds/packages/lang/rust"* ]]; then
-            echo "警告：rust-package.mk 路径与预期不符，可能需要调整 smartdns Makefile"
-            echo "当前路径：$RUST_MK_PATH"
-            echo "预期路径：feeds/packages/lang/rust/rust-package.mk"
-          fi
         fi
+        echo "Rust feeds 安装成功，开始查找 rust-package.mk..."
+    
+    - name: Step 2 Fix SmartDNS Makefile (Relative → Absolute Path)
+      run: |
+        cd $OPENWRT_PATH
+        # 1. 找到 rust-package.mk 的绝对路径（取第一个结果）
+        RUST_MK_ABS_PATH=$(find $OPENWRT_PATH -name rust-package.mk | head -1)
+        if [ -z "$RUST_MK_ABS_PATH" ]; then
+          echo "错误：未找到 rust-package.mk，请先确认 Step 1 安装成功！"
+          exit 1
+        fi
+        echo "✅ 找到 rust-package.mk 绝对路径：$RUST_MK_ABS_PATH"
+        
+        # 2. 定位 smartdns 的 Makefile
+        SMARTDNS_MAKEFILE="$OPENWRT_PATH/package/smartdns/Makefile"
+        if [ ! -f "$SMARTDNS_MAKEFILE" ]; then
+          echo "错误：未找到 smartdns Makefile（路径：$SMARTDNS_MAKEFILE）"
+          exit 1
+        fi
+        
+        # 3. 替换相对路径为绝对路径（修改第33行的依赖引用）
+        sed -i "s|../../lang/rust/rust-package.mk|$RUST_MK_ABS_PATH|g" "$SMARTDNS_MAKEFILE"
+        echo "✅ 已修改 smartdns Makefile 路径"
+        
+        # 4. 验证修改结果（显示修改后的关键行）
+        echo "🔍 修改后 Makefile 关键行："
+        grep "rust-package.mk" "$SMARTDNS_MAKEFILE"
+    
+    - name: Step 3 Verify SmartDNS Compile Preparation
+      run: |
+        cd $OPENWRT_PATH
+        # 1. 再次确认 rust-package.mk 存在
+        RUST_MK_ABS_PATH=$(find $OPENWRT_PATH -name rust-package.mk | head -1)
+        if [ -f "$RUST_MK_ABS_PATH" ]; then
+          echo "✅ rust-package.mk 存在（路径：$RUST_MK_ABS_PATH）"
+        else
+          echo "错误：rust-package.mk 不存在，编译会失败！"
+          exit 1
+        fi
+    
+    # 2. 确认 smartdns Makefile 已修改正确
+    SMARTDNS_MAKEFILE="$OPENWRT_PATH/package/smartdns/Makefile"
+    if grep -q "$RUST_MK_ABS_PATH" "$SMARTDNS_MAKEFILE"; then
+      echo "✅ smartdns Makefile 路径修改正确"
+    else
+      echo "错误：smartdns Makefile 路径修改失败！"
+      cat "$SMARTDNS_MAKEFILE" | grep -n "rust-package.mk"  # 显示错误行
+      exit 1
+    fi
+    
+    # 3. 清理 smartdns 之前的编译缓存（避免旧错误残留）
+    make package/smartdns/clean > /dev/null 2>&1
+    echo "✅ smartdns 编译缓存已清理，准备开始编译"
     
     - name: Load Custom Configuration
       run: |
