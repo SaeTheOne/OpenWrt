@@ -1,10 +1,9 @@
 #!/bin/bash
 
 
-OPENWRT_DIR="/mnt/openwrt_build/openwrt"
+OPENWRT_DIR="/home/runner/work/OpenWrt/OpenWrt/openwrt"
 PACKAGE_DIR="${OPENWRT_DIR}/package"
-mkdir -p ${PACKAGE_DIR}
-cd ${OPENWRT_DIR} || exit  # 切换到正确的源码目录
+cd ${OPENWRT_DIR} || exit  # 确保切换到正确目录
 
 # 修改默认IP（按需启用）
 # sed -i 's/192.168.1.1/10.0.0.1/g' package/base-files/files/bin/config_generate
