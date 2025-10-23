@@ -241,20 +241,18 @@ jobs:
           echo "错误：rust-package.mk 不存在，编译会失败！"
           exit 1
         fi
-    
-    # 2. 确认 smartdns Makefile 已修改正确
-    SMARTDNS_MAKEFILE="$OPENWRT_PATH/package/smartdns/Makefile"
-    if grep -q "$RUST_MK_ABS_PATH" "$SMARTDNS_MAKEFILE"; then
-      echo "✅ smartdns Makefile 路径修改正确"
-    else
-      echo "错误：smartdns Makefile 路径修改失败！"
-      cat "$SMARTDNS_MAKEFILE" | grep -n "rust-package.mk"  # 显示错误行
-      exit 1
-    fi
-    
-    # 3. 清理 smartdns 之前的编译缓存（避免旧错误残留）
-    make package/smartdns/clean > /dev/null 2>&1
-    echo "✅ smartdns 编译缓存已清理，准备开始编译"
+        SMARTDNS_MAKEFILE="$OPENWRT_PATH/package/smartdns/Makefile"
+        if grep -q "$RUST_MK_ABS_PATH" "$SMARTDNS_MAKEFILE"; then
+          echo "✅ smartdns Makefile 路径修改正确"
+        else
+          echo "错误：smartdns Makefile 路径修改失败！"
+          cat "$SMARTDNS_MAKEFILE" | grep -n "rust-package.mk"  # 显示错误行
+          exit 1
+        fi
+        
+        # 3. 清理 smartdns 之前的编译缓存（避免旧错误残留）
+        make package/smartdns/clean > /dev/null 2>&1
+        echo "✅ smartdns 编译缓存已清理，准备开始编译"
     
     - name: Load Custom Configuration
       run: |
