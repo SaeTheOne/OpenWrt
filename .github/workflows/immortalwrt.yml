@@ -51,12 +51,22 @@ jobs:
       env:
         DEBIAN_FRONTEND: noninteractive
       run: |
+        # 1. 清理冗余软件和目录（先卸载不需要的工具）
         docker rmi $(docker images -q)
         sudo rm -rf /usr/share/dotnet /etc/apt/sources.list.d /usr/local/lib/android $AGENT_TOOLSDIRECTORY
-        sudo -E apt-get -y purge azure-cli ghc* zulu* llvm* firefox google* dotnet* powershell openjdk* mongodb* moby* || true
+        # 注意：删除 "llvm*"，避免先卸载后安装的冲突
+        sudo -E apt-get -y purge azure-cli ghc* zulu* firefox google* dotnet* powershell openjdk* mongodb* moby* || true
+        
+        # 2. 更新软件源并一次性安装所有依赖（去重，避免重复执行）
         sudo -E apt-get -y update
-        # 原有依赖安装命令 + 补充内核头文件依赖
-        sudo -E apt-get -y install $(curl -fsSL is.gd/depends_ubuntu_2204) bison flex libelf-dev libssl-dev
+        # 合并原有依赖 + 补充依赖，一次性安装
+        sudo -E apt-get -y install \
+          $(curl -fsSL is.gd/depends_ubuntu_2204) \
+          bison flex libelf-dev libssl-dev \
+          antlr3 asciidoc autopoint ecj fastjar gnutls-dev haveged \
+          llvm lld mkisofs msmtp qemu-utils re2c swig uglifyjs upx-ucl
+      
+        # 3. 系统配置和清理（只执行一次）
         sudo -E systemctl daemon-reload
         sudo -E apt-get -y autoremove --purge
         sudo -E apt-get -y clean
