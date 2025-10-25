@@ -166,21 +166,34 @@ jobs:
         [ -d "feeds/packages/utils/pv" ] && echo "pv 包存在" || echo "pv 包缺失"
 
     # 新增步骤1：修复feeds并定位ncurses路径
-    - name: Fix Feeds and Locate ncurses (新增步骤)
+    - name: Fix Feeds and Locate ncurses/pcre (精确版)
       run: |
         cd $OPENWRT_PATH
-        ./scripts/feeds update packages luci
-        ./scripts/feeds install -p packages ncurses pcre
-        NCURSES_PATH=$(find feeds -name "ncurses" -type d | grep -E "libs/ncurses|packages/ncurses" | head -1)
-        if [ -z "$NCURSES_PATH" ]; then
-          echo "警告：feeds中未找到ncurses，手动补充"
-          git clone --depth=1 https://github.com/openwrt/packages package/tmp-packages
-          mv package/tmp-packages/libs/ncurses feeds/packages/libs/
-          rm -rf package/tmp-packages
-          NCURSES_PATH="feeds/packages/libs/ncurses"
+        # 1. 强制从immortalwrt官方源安装（确保兼容性）
+        ./scripts/feeds update -f packages
+        ./scripts/feeds install -f -p packages ncurses libpcre
+        
+        # 2. 检查ncurses，若缺失则直接下载Makefile和源码（绕过仓库克隆）
+        NCURSES_DIR="feeds/packages/libs/ncurses"
+        if [ ! -d "$NCURSES_DIR" ]; then
+          echo "直接下载ncurses包文件"
+          mkdir -p $NCURSES_DIR
+          # 从immortalwrt/packages的master分支下载关键文件
+          wget -O $NCURSES_DIR/Makefile https://raw.githubusercontent.com/immortalwrt/packages/master/libs/ncurses/Makefile
+          wget -O $NCURSES_DIR/patches/001-configure.patch https://raw.githubusercontent.com/immortalwrt/packages/master/libs/ncurses/patches/001-configure.patch
+          wget -O $NCURSES_DIR/patches/002-cross-compile.patch https://raw.githubusercontent.com/immortalwrt/packages/master/libs/ncurses/patches/002-cross-compile.patch
         fi
-        echo "NCURSES_PATH=$NCURSES_PATH" >> $GITHUB_ENV
-        echo "找到ncurses路径：$NCURSES_PATH"
+        echo "NCURSES_PATH=$NCURSES_DIR" >> $GITHUB_ENV
+        echo "找到ncurses路径：$NCURSES_DIR"
+        
+        # 3. 检查pcre，若缺失则直接下载Makefile
+        PCRE_DIR="feeds/packages/libs/pcre"
+        if [ ! -d "$PCRE_DIR" ]; then
+          echo "直接下载pcre包文件"
+          mkdir -p $PCRE_DIR
+          wget -O $PCRE_DIR/Makefile https://raw.githubusercontent.com/immortalwrt/packages/master/libs/pcre/Makefile
+        fi
+        echo "已确认pcre包存在"
 
     - name: Load Custom Configuration
       run: |
