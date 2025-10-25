@@ -17,7 +17,7 @@ cd ${OPENWRT_DIR} || exit  # 确保切换到正确目录
 # 移除要替换的包
 rm -rf feeds/packages/net/mosdns
 rm -rf feeds/packages/net/msd_lite
-rm -rf feeds/packages/net/smartdns
+#rm -rf feeds/packages/net/smartdns
 rm -rf feeds/luci/themes/luci-theme-argon
 rm -rf feeds/luci/themes/luci-theme-netgear
 rm -rf feeds/luci/applications/luci-app-mosdns
@@ -75,8 +75,8 @@ sed -i "s|firmware_repo.*|firmware_repo 'https://github.com/haiibo/OpenWrt'|g" $
 sed -i "s|ARMv8|ARMv8_PLUS|g" ${PACKAGE_DIR}/luci-app-amlogic/root/etc/config/amlogic
 
 # 网络工具（保留1-2个，避免全部启用）
-git clone --depth=1 -b lede https://github.com/pymumu/luci-app-smartdns ${PACKAGE_DIR}/luci-app-smartdns
-git clone --depth=1 https://github.com/pymumu/openwrt-smartdns ${PACKAGE_DIR}/smartdns
+#git clone --depth=1 -b lede https://github.com/pymumu/luci-app-smartdns ${PACKAGE_DIR}/luci-app-smartdns
+#git clone --depth=1 https://github.com/pymumu/openwrt-smartdns ${PACKAGE_DIR}/smartdns
 # git clone --depth=1 https://github.com/ximiTech/luci-app-msd_lite ${PACKAGE_DIR}/luci-app-msd_lite  # 可选
 # git clone --depth=1 https://github.com/ximiTech/msd_lite ${PACKAGE_DIR}/msd_lite  # 可选
 # git clone --depth=1 https://github.com/sbwml/luci-app-mosdns ${PACKAGE_DIR}/luci-app-mosdns  # 可选
