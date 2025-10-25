@@ -51,22 +51,17 @@ jobs:
       env:
         DEBIAN_FRONTEND: noninteractive
       run: |
-        # 1. 清理冗余软件和目录（先卸载不需要的工具）
         docker rmi $(docker images -q)
         sudo rm -rf /usr/share/dotnet /etc/apt/sources.list.d /usr/local/lib/android $AGENT_TOOLSDIRECTORY
-        # 注意：删除 "llvm*"，避免先卸载后安装的冲突
+        # 移除 llvm* 避免先卸后装冲突
         sudo -E apt-get -y purge azure-cli ghc* zulu* firefox google* dotnet* powershell openjdk* mongodb* moby* || true
-        
-        # 2. 更新软件源并一次性安装所有依赖（去重，避免重复执行）
         sudo -E apt-get -y update
-        # 合并原有依赖 + 补充依赖，一次性安装
+        # 合并基础依赖+补充依赖，一次性安装
         sudo -E apt-get -y install \
           $(curl -fsSL is.gd/depends_ubuntu_2204) \
           bison flex libelf-dev libssl-dev \
           antlr3 asciidoc autopoint ecj fastjar gnutls-dev haveged \
           llvm lld mkisofs msmtp qemu-utils re2c swig uglifyjs upx-ucl
-      
-        # 3. 系统配置和清理（只执行一次）
         sudo -E systemctl daemon-reload
         sudo -E apt-get -y autoremove --purge
         sudo -E apt-get -y clean
@@ -85,32 +80,15 @@ jobs:
     - name: Checkout
       uses: actions/checkout@main
 
-  
-    - name: Check and Remount /mnt
-      run: |
-        # 查看当前挂载情况
-        mount | grep /mnt
-        # 若未挂载到/dev/sda1，强制重新挂载
-        if ! mount | grep /mnt | grep -q /dev/sda1; then
-          sudo umount /mnt || true
-          sudo mount /dev/sda1 /mnt
-          echo "已将/dev/sda1重新挂载到/mnt"
-        fi
-        # 再次验证空间
-        df -hT /mnt
-    
     - name: Clone Source Code to Workspace
       id: clone
       run: |
-        # 1. 验证工作目录空间（确保108G空闲可用）
         echo "=== 当前工作目录空间情况 ==="
         df -hT /home/runner/work/OpenWrt/OpenWrt
-        # 2. 克隆源码到工作目录（避免/mnt空间不足）
         git clone $REPO_URL -b $REPO_BRANCH /home/runner/work/OpenWrt/OpenWrt/openwrt
         cd /home/runner/work/OpenWrt/OpenWrt/openwrt
-        # 3. 设置OPENWRT_PATH环境变量（后续步骤依赖此路径）
         echo "OPENWRT_PATH=$PWD" >> $GITHUB_ENV
-        # 4. 提取提交信息（保持不变）
+        # 提取提交信息
         COMMIT_AUTHOR=$(git show -s --date=short --format="作者: %an")
         echo "COMMIT_AUTHOR=$COMMIT_AUTHOR" >> $GITHUB_ENV
         echo "COMMIT_AUTHOR=$COMMIT_AUTHOR" >> $GITHUB_OUTPUT
@@ -123,38 +101,24 @@ jobs:
         COMMIT_HASH=$(git show -s --date=short --format="hash: %H")
         echo "COMMIT_HASH=$COMMIT_HASH" >> $GITHUB_ENV
         echo "COMMIT_HASH=$COMMIT_HASH" >> $GITHUB_OUTPUT
-        # 5. 验证源码目录权限（确保可读写）
         echo "=== 源码目录权限验证 ==="
         ls -ld /home/runner/work/OpenWrt/OpenWrt/openwrt
 
     - name: Verify Compile Directory
       run: |
         echo "OpenWrt 源码路径：$OPENWRT_PATH"
-        # 只验证工作目录下的源码目录（已切换到工作目录，无需管/mnt）
         echo "=== 工作目录下源码目录权限 ==="
         ls -ld $OPENWRT_PATH
         echo "=== 工作目录空间情况 ==="
         df -hT $OPENWRT_PATH
-    
 
-    # - name: Verify /mnt Space and Permissions  # 新增此步骤（调试用）
-    #   run: |
-    #     echo "当前/mnt空间情况："
-    #     df -hT /mnt
-    #     echo "当前/mnt权限情况："
-    #     ls -ld /mnt
-    #     echo "OpenWrt源码目录权限："
-    #     ls -ld $OPENWRT_PATH
-        
     - name: Fix Source Code Integrity
       run: |
         cd $OPENWRT_PATH
-        # 确保所有子模块和依赖源码完整
         git submodule update --init --recursive
-        # 强制同步最新源码（避免本地缓存问题）
         git fetch --all
         git reset --hard origin/$REPO_BRANCH
-    
+
     - name: Generate Variables
       id: variable
       run: |
@@ -170,14 +134,13 @@ jobs:
         echo "DEVICE_SUBTARGET=$DEVICE_SUBTARGET" >> $GITHUB_ENV
         echo "DEVICE_SUBTARGET=$DEVICE_SUBTARGET" >> $GITHUB_OUTPUT
 
-    - name: Check Kernel Version Compatibility  # 新增此步骤
+    - name: Check Kernel Version Compatibility
       run: |
         cd $OPENWRT_PATH
         echo "配置文件中的内核版本："
         grep CONFIG_KERNEL_VERSION .config || echo "未找到CONFIG_KERNEL_VERSION配置"
         echo "源码支持的内核版本："
         grep KERNEL_PATCHVER target/linux/${DEVICE_TARGET}/Makefile || echo "未找到源码内核版本定义"
-    
 
     - name: Cache Toolchain
       if: env.CACHE_TOOLCHAIN == 'true'
@@ -187,17 +150,21 @@ jobs:
         mixkey: ${{ env.SOURCE_REPO }}-${{ env.REPO_BRANCH }}-${{ env.DEVICE_TARGET }}-${{ env.DEVICE_SUBTARGET }}
         prefix: ${{ env.OPENWRT_PATH }}
 
-    - name: Clean Toolchain Cache  # 新增此步骤
+    - name: Clean Toolchain Cache
       run: |
         cd $OPENWRT_PATH
-        make toolchain/kernel-headers/clean  # 清理内核头文件编译缓存
-        make toolchain/clean  # 清理整个工具链缓存  
-    
-    - name: Install Feeds
+        make toolchain/kernel-headers/clean
+        make toolchain/clean
+
+    - name: Install Feeds (Force Update)
       run: |
         cd $OPENWRT_PATH
-        ./scripts/feeds update -a
-        ./scripts/feeds install -a
+        ./scripts/feeds clean
+        ./scripts/feeds update -a -f  # 强制更新feeds
+        ./scripts/feeds install -a -f  # 强制重新安装所有包
+        echo "=== 验证关键包是否存在 ==="
+        [ -d "feeds/packages/libs/ncurses" ] && echo "ncurses 包存在" || echo "ncurses 包缺失"
+        [ -d "feeds/packages/utils/pv" ] && echo "pv 包存在" || echo "pv 包缺失"
 
     - name: Load Custom Configuration
       run: |
@@ -209,8 +176,53 @@ jobs:
         $GITHUB_WORKSPACE/$DIY_SCRIPT
         $GITHUB_WORKSPACE/scripts/preset-clash-core.sh $CLASH_KERNEL
         $GITHUB_WORKSPACE/scripts/preset-terminal-tools.sh
-    
-    
+
+    - name: Enable Required Dependencies (ncursesw/libpcre)
+      run: |
+        cd $OPENWRT_PATH
+        # 启用 ncurses 及 ncursesw（宽字符支持）
+        echo "CONFIG_PACKAGE_ncurses=y" >> .config
+        echo "CONFIG_PACKAGE_ncursesw=y" >> .config
+        # 解决 ssr-plus 依赖警告
+        echo "CONFIG_PACKAGE_libpcre=y" >> .config
+        # 解决 luci-app-msd_lite 依赖警告
+        echo "CONFIG_PACKAGE_msd_lite=y" >> .config
+        # 应用配置
+        make defconfig
+        # 验证配置
+        echo "=== 依赖配置验证结果 ==="
+        grep "CONFIG_PACKAGE_ncursesw" .config
+        grep "CONFIG_PACKAGE_libpcre" .config
+        grep "CONFIG_PACKAGE_msd_lite" .config
+
+    - name: Pre-Compile ncurses (Include ncursesw)
+      run: |
+        cd $OPENWRT_PATH
+        echo "=== 提前编译 ncurses（包含 ncursesw 支持） ==="
+        # 正确路径：feeds/packages/libs/ncurses
+        make package/feeds/packages/ncurses/compile V=s
+        # 验证 libncursesw.so 是否生成
+        echo "=== 查找 libncursesw.so 结果 ==="
+        find staging_dir/target-aarch64_generic_musl/ -name "libncursesw.so*"
+        if [ $? -ne 0 ]; then
+          echo "错误：未生成 libncursesw.so，ncursesw 配置未生效"
+          exit 1
+        fi
+
+    - name: Pre-Compile pv (Test Separately)
+      run: |
+        cd $OPENWRT_PATH
+        echo "=== 提前编译 pv 包 ==="
+        # 正确路径：feeds/packages/utils/pv
+        make package/feeds/packages/pv/compile V=s
+        # 验证 pv 安装包是否生成
+        echo "=== 查找 pv 编译结果 ==="
+        find bin/packages/aarch64_generic/packages/ -name "pv-*.apk"
+        if [ $? -ne 0 ]; then
+          echo "错误：pv 编译失败"
+          exit 1
+        fi
+        echo "=== pv 提前编译成功 ==="
 
     - name: Download DL Package
       run: |
@@ -219,36 +231,6 @@ jobs:
         make download -j8
         find dl -size -1024c -exec ls -l {} \;
         find dl -size -1024c -exec rm -f {} \;
-
-    - name: Pre-Compile Dependencies for pv (ncursesw)
-      run: |
-        cd $OPENWRT_PATH
-        echo "=== 提前编译 ncursesw（pv 的依赖库） ==="
-        # 强制编译 ncursesw 并输出详细日志
-        make package/ncursesw/compile V=s
-        # 检查 ncursesw 库是否生成
-        echo "=== 检查 ncursesw 编译结果 ==="
-        find staging_dir/target-aarch64_generic_musl/ -name "libncursesw.so*"
-        if [ $? -ne 0 ]; then
-          echo "错误：ncursesw 编译失败，未生成 libncursesw.so"
-          exit 1
-        fi
-
-    - name: Pre-Compile pv (单独测试)
-      run: |
-        cd $OPENWRT_PATH
-        echo "=== 提前编译 pv 包 ==="
-        # 单独编译 pv 并输出详细日志（便于定位错误）
-        make package/pv/compile V=s
-        # 检查 pv 是否编译成功
-        echo "=== 检查 pv 编译结果 ==="
-        find bin/packages/aarch64_generic/packages/ -name "pv-*.apk"
-        if [ $? -ne 0 ]; then
-          echo "错误：pv 编译失败，未生成 apk 包"
-          exit 1
-        fi
-        echo "pv 提前编译成功，继续主编译流程"
-        
 
     - name: Compile Firmware
       id: compile
