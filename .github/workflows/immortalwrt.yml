@@ -127,14 +127,14 @@ jobs:
         df -hT $OPENWRT_PATH
     
 
-    - name: Verify /mnt Space and Permissions  # 新增此步骤（调试用）
-      run: |
-        echo "当前/mnt空间情况："
-        df -hT /mnt
-        echo "当前/mnt权限情况："
-        ls -ld /mnt
-        echo "OpenWrt源码目录权限："
-        ls -ld $OPENWRT_PATH
+    # - name: Verify /mnt Space and Permissions  # 新增此步骤（调试用）
+    #   run: |
+    #     echo "当前/mnt空间情况："
+    #     df -hT /mnt
+    #     echo "当前/mnt权限情况："
+    #     ls -ld /mnt
+    #     echo "OpenWrt源码目录权限："
+    #     ls -ld $OPENWRT_PATH
         
     - name: Fix Source Code Integrity
       run: |
@@ -200,71 +200,6 @@ jobs:
         $GITHUB_WORKSPACE/scripts/preset-clash-core.sh $CLASH_KERNEL
         $GITHUB_WORKSPACE/scripts/preset-terminal-tools.sh
     
-# 解决 smartdns 依赖 rust-package.mk 路径问题的完整流程
-    # - name: Step 1 Install Rust Feeds for SmartDNS
-    #   run: |
-    #     cd $OPENWRT_PATH
-    #     # 1. 更新 packages feeds，确保包含 rust 相关包
-    #     ./scripts/feeds update packages
-    #     # 2. 安装 Rust 核心依赖（生成 rust-package.mk）
-    #     ./scripts/feeds install -p packages rust rustc cargo
-    #     # 3. 验证 rust 目录是否存在
-    #     if [ ! -d "feeds/packages/lang/rust" ]; then
-    #       echo "错误：Rust feeds 安装失败，未找到 feeds/packages/lang/rust"
-    #       exit 1
-    #     fi
-    #     echo "Rust feeds 安装成功，开始查找 rust-package.mk..."
-    
-    # - name: Step 2 Fix SmartDNS Makefile (Relative → Absolute Path)
-    #   run: |
-    #     cd $OPENWRT_PATH
-    #     # 1. 找到 rust-package.mk 的绝对路径（取第一个结果）
-    #     RUST_MK_ABS_PATH=$(find $OPENWRT_PATH -name rust-package.mk | head -1)
-    #     if [ -z "$RUST_MK_ABS_PATH" ]; then
-    #       echo "错误：未找到 rust-package.mk，请先确认 Step 1 安装成功！"
-    #       exit 1
-    #     fi
-    #     echo "✅ 找到 rust-package.mk 绝对路径：$RUST_MK_ABS_PATH"
-        
-    #     # 2. 定位 smartdns 的 Makefile
-    #     SMARTDNS_MAKEFILE="$OPENWRT_PATH/package/smartdns/Makefile"
-    #     if [ ! -f "$SMARTDNS_MAKEFILE" ]; then
-    #       echo "错误：未找到 smartdns Makefile（路径：$SMARTDNS_MAKEFILE）"
-    #       exit 1
-    #     fi
-        
-    #     # 3. 替换相对路径为绝对路径（修改第33行的依赖引用）
-    #     sed -i "s|../../lang/rust/rust-package.mk|$RUST_MK_ABS_PATH|g" "$SMARTDNS_MAKEFILE"
-    #     echo "✅ 已修改 smartdns Makefile 路径"
-        
-    #     # 4. 验证修改结果（显示修改后的关键行）
-    #     echo "🔍 修改后 Makefile 关键行："
-    #     grep "rust-package.mk" "$SMARTDNS_MAKEFILE"
-    
-    # - name: Step 3 Verify SmartDNS Compile Preparation
-    #   run: |
-    #     cd $OPENWRT_PATH
-    #     # 1. 再次确认 rust-package.mk 存在
-    #     RUST_MK_ABS_PATH=$(find $OPENWRT_PATH -name rust-package.mk | head -1)
-    #     if [ -f "$RUST_MK_ABS_PATH" ]; then
-    #       echo "✅ rust-package.mk 存在（路径：$RUST_MK_ABS_PATH）"
-    #     else
-    #       echo "错误：rust-package.mk 不存在，编译会失败！"
-    #       exit 1
-    #     fi
-    #     SMARTDNS_MAKEFILE="$OPENWRT_PATH/package/smartdns/Makefile"
-    #     if grep -q "$RUST_MK_ABS_PATH" "$SMARTDNS_MAKEFILE"; then
-    #       echo "✅ smartdns Makefile 路径修改正确"
-    #     else
-    #       echo "错误：smartdns Makefile 路径修改失败！"
-    #       cat "$SMARTDNS_MAKEFILE" | grep -n "rust-package.mk"  # 显示错误行
-    #       exit 1
-    #     fi
-        
-    #     # 3. 清理 smartdns 之前的编译缓存（避免旧错误残留）
-    #     make package/smartdns/clean > /dev/null 2>&1
-    #     echo "✅ smartdns 编译缓存已清理，准备开始编译"
-    
     
 
     - name: Download DL Package
@@ -274,6 +209,36 @@ jobs:
         make download -j8
         find dl -size -1024c -exec ls -l {} \;
         find dl -size -1024c -exec rm -f {} \;
+
+    - name: Pre-Compile Dependencies for pv (ncursesw)
+      run: |
+        cd $OPENWRT_PATH
+        echo "=== 提前编译 ncursesw（pv 的依赖库） ==="
+        # 强制编译 ncursesw 并输出详细日志
+        make package/ncursesw/compile V=s
+        # 检查 ncursesw 库是否生成
+        echo "=== 检查 ncursesw 编译结果 ==="
+        find staging_dir/target-aarch64_generic_musl/ -name "libncursesw.so*"
+        if [ $? -ne 0 ]; then
+          echo "错误：ncursesw 编译失败，未生成 libncursesw.so"
+          exit 1
+        fi
+
+    - name: Pre-Compile pv (单独测试)
+      run: |
+        cd $OPENWRT_PATH
+        echo "=== 提前编译 pv 包 ==="
+        # 单独编译 pv 并输出详细日志（便于定位错误）
+        make package/pv/compile V=s
+        # 检查 pv 是否编译成功
+        echo "=== 检查 pv 编译结果 ==="
+        find bin/packages/aarch64_generic/packages/ -name "pv-*.apk"
+        if [ $? -ne 0 ]; then
+          echo "错误：pv 编译失败，未生成 apk 包"
+          exit 1
+        fi
+        echo "pv 提前编译成功，继续主编译流程"
+        
 
     - name: Compile Firmware
       id: compile
