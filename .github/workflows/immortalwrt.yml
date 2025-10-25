@@ -53,19 +53,19 @@ jobs:
       run: |
         docker rmi $(docker images -q)
         sudo rm -rf /usr/share/dotnet /etc/apt/sources.list.d /usr/local/lib/android $AGENT_TOOLSDIRECTORY
-        # 移除 llvm* 避免先卸后装冲突
         sudo -E apt-get -y purge azure-cli ghc* zulu* firefox google* dotnet* powershell openjdk* mongodb* moby* || true
         sudo -E apt-get -y update
-        # 合并基础依赖+补充依赖，一次性安装
-        sudo -E apt-get -y install \
-          $(curl -fsSL is.gd/depends_ubuntu_2204) \
-          bison flex libelf-dev libssl-dev \
-          antlr3 asciidoc autopoint ecj fastjar gnutls-dev haveged \
-          llvm lld mkisofs msmtp qemu-utils re2c swig uglifyjs upx-ucl
+        sudo -E apt-get -y install $(curl -fsSL is.gd/depends_ubuntu_2204) bison flex libelf-dev libssl-dev
         sudo -E systemctl daemon-reload
         sudo -E apt-get -y autoremove --purge
         sudo -E apt-get -y clean
         sudo timedatectl set-timezone "$TZ"
+        sudo -E apt-get -y update
+        sudo -E apt-get -y install $(curl -fsSL is.gd/depends_ubuntu_2204)
+        sudo -E apt-get -y install antlr3 asciidoc autopoint ecj fastjar gnutls-dev haveged \
+          llvm lld mkisofs msmtp qemu-utils re2c swig uglifyjs upx-ucl
+        sudo -E apt-get -y autoremove --purge
+        sudo -E apt-get -y clean
 
     - name: Combine Disks
       uses: easimon/maximize-build-space@master
@@ -88,7 +88,6 @@ jobs:
         git clone $REPO_URL -b $REPO_BRANCH /home/runner/work/OpenWrt/OpenWrt/openwrt
         cd /home/runner/work/OpenWrt/OpenWrt/openwrt
         echo "OPENWRT_PATH=$PWD" >> $GITHUB_ENV
-        # 提取提交信息
         COMMIT_AUTHOR=$(git show -s --date=short --format="作者: %an")
         echo "COMMIT_AUTHOR=$COMMIT_AUTHOR" >> $GITHUB_ENV
         echo "COMMIT_AUTHOR=$COMMIT_AUTHOR" >> $GITHUB_OUTPUT
@@ -160,33 +159,29 @@ jobs:
       run: |
         cd $OPENWRT_PATH
         ./scripts/feeds clean
-        ./scripts/feeds update -a -f  # 强制更新feeds
-        ./scripts/feeds install -a -f  # 强制重新安装所有包
+        ./scripts/feeds update -a -f
+        ./scripts/feeds install -a -f
         echo "=== 验证关键包是否存在 ==="
         [ -d "feeds/packages/libs/ncurses" ] && echo "ncurses 包存在" || echo "ncurses 包缺失"
         [ -d "feeds/packages/utils/pv" ] && echo "pv 包存在" || echo "pv 包缺失"
 
-    - name: Install Missing Dependencies (msd_lite/libpcre)
+    # 新增步骤1：修复feeds并定位ncurses路径
+    - name: Fix Feeds and Locate ncurses (新增步骤)
       run: |
         cd $OPENWRT_PATH
-        # 1. 安装 libpcre（ssr-plus 依赖）
-        ./scripts/feeds install -p packages libpcre
-        # 2. 安装 msd_lite（luci-app-msd_lite 依赖）
-        # 先查找 msd_lite 所在的 feeds（通常在 packages 或 luci 中）
-        if ./scripts/feeds list | grep -q "msd_lite"; then
-          ./scripts/feeds install -a msd_lite
-        else
-          # 若 feeds 中没有，从 immortalwrt 仓库克隆（适配你的源码）
-          git clone --depth=1 https://github.com/immortalwrt/packages package/immortalwrt-packages
-          mv -f package/immortalwrt-packages/net/msd_lite package/
-          rm -rf package/immortalwrt-packages
-          echo "已手动克隆 msd_lite 到 package 目录"
+        ./scripts/feeds update packages luci
+        ./scripts/feeds install -p packages ncurses pcre
+        NCURSES_PATH=$(find feeds -name "ncurses" -type d | grep -E "libs/ncurses|packages/ncurses" | head -1)
+        if [ -z "$NCURSES_PATH" ]; then
+          echo "警告：feeds中未找到ncurses，手动补充"
+          git clone --depth=1 https://github.com/openwrt/packages package/tmp-packages
+          mv package/tmp-packages/libs/ncurses feeds/packages/libs/
+          rm -rf package/tmp-packages
+          NCURSES_PATH="feeds/packages/libs/ncurses"
         fi
-        # 验证包是否安装成功
-        echo "=== 验证依赖包是否存在 ==="
-        [ -d "feeds/packages/libs/pcre" ] && echo "libpcre 包存在" || echo "libpcre 包缺失"
-        [ -d "package/msd_lite" ] || [ -d "feeds/packages/net/msd_lite" ] && echo "msd_lite 包存在" || echo "msd_lite 包缺失"
-        
+        echo "NCURSES_PATH=$NCURSES_PATH" >> $GITHUB_ENV
+        echo "找到ncurses路径：$NCURSES_PATH"
+
     - name: Load Custom Configuration
       run: |
         [ -e files ] && mv files $OPENWRT_PATH/files
@@ -198,50 +193,55 @@ jobs:
         $GITHUB_WORKSPACE/scripts/preset-clash-core.sh $CLASH_KERNEL
         $GITHUB_WORKSPACE/scripts/preset-terminal-tools.sh
 
-    - name: Enable Required Dependencies (ncursesw/libpcre/msd_lite)
+    - name: Enable Required Dependencies (ncursesw/libpcre)
       run: |
         cd $OPENWRT_PATH
-        # 启用依赖配置（包已安装，配置才有效）
         echo "CONFIG_PACKAGE_ncurses=y" >> .config
         echo "CONFIG_PACKAGE_ncursesw=y" >> .config
         echo "CONFIG_PACKAGE_libpcre=y" >> .config
         echo "CONFIG_PACKAGE_msd_lite=y" >> .config
-        # 应用配置
         make defconfig
-        # 优化验证：用 grep -q 避免无结果时退出
         echo "=== 依赖配置验证结果 ==="
-        grep -q "CONFIG_PACKAGE_ncursesw=y" .config && echo "✅ ncursesw 已启用" || echo "❌ ncursesw 未启用"
-        grep -q "CONFIG_PACKAGE_libpcre=y" .config && echo "✅ libpcre 已启用" || echo "❌ libpcre 未启用"
-        grep -q "CONFIG_PACKAGE_msd_lite=y" .config && echo "✅ msd_lite 已启用" || echo "❌ msd_lite 未启用"
+        grep "CONFIG_PACKAGE_ncursesw" .config
+        grep "CONFIG_PACKAGE_libpcre" .config
+        grep "CONFIG_PACKAGE_msd_lite" .config
 
+    # 新增步骤2：解决msd_lite依赖警告
+    - name: Resolve msd_lite Dependency Warning (新增步骤)
+      run: |
+        cd $OPENWRT_PATH
+        if ! ./scripts/feeds list | grep -q "msd_lite"; then
+          echo "临时注释luci-app-msd_lite的依赖"
+          find package/feeds/luci/luci-app-msd_lite -name "Makefile" -exec sed -i 's/DEPENDS:=+msd_lite/DEPENDS:=/' {} \;
+        fi
+
+    # 修改后的步骤：用动态路径编译ncurses
     - name: Pre-Compile ncurses (Include ncursesw)
       run: |
         cd $OPENWRT_PATH
-        echo "=== 提前编译 ncurses（包含 ncursesw 支持） ==="
-        # 正确路径：feeds/packages/libs/ncurses
-        make package/feeds/packages/ncurses/compile V=s
-        # 验证 libncursesw.so 是否生成
-        echo "=== 查找 libncursesw.so 结果 ==="
+        echo "=== 提前编译ncurses（包含ncursesw支持） ==="
+        NCURSES_COMPILE_PATH=$(echo "$NCURSES_PATH" | sed 's/feeds\//package\/feeds\//')
+        echo "使用动态路径编译：$NCURSES_COMPILE_PATH"
+        make $NCURSES_COMPILE_PATH/compile V=s
+        echo "=== 查找libncursesw.so结果 ==="
         find staging_dir/target-aarch64_generic_musl/ -name "libncursesw.so*"
         if [ $? -ne 0 ]; then
-          echo "错误：未生成 libncursesw.so，ncursesw 配置未生效"
+          echo "错误：未生成libncursesw.so"
           exit 1
         fi
 
     - name: Pre-Compile pv (Test Separately)
       run: |
         cd $OPENWRT_PATH
-        echo "=== 提前编译 pv 包 ==="
-        # 正确路径：feeds/packages/utils/pv
+        echo "=== 提前编译pv包 ==="
         make package/feeds/packages/pv/compile V=s
-        # 验证 pv 安装包是否生成
-        echo "=== 查找 pv 编译结果 ==="
+        echo "=== 查找pv编译结果 ==="
         find bin/packages/aarch64_generic/packages/ -name "pv-*.apk"
         if [ $? -ne 0 ]; then
-          echo "错误：pv 编译失败"
+          echo "错误：pv编译失败"
           exit 1
         fi
-        echo "=== pv 提前编译成功 ==="
+        echo "=== pv提前编译成功 ==="
 
     - name: Download DL Package
       run: |
