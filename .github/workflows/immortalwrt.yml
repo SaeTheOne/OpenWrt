@@ -166,6 +166,27 @@ jobs:
         [ -d "feeds/packages/libs/ncurses" ] && echo "ncurses 包存在" || echo "ncurses 包缺失"
         [ -d "feeds/packages/utils/pv" ] && echo "pv 包存在" || echo "pv 包缺失"
 
+    - name: Install Missing Dependencies (msd_lite/libpcre)
+      run: |
+        cd $OPENWRT_PATH
+        # 1. 安装 libpcre（ssr-plus 依赖）
+        ./scripts/feeds install -p packages libpcre
+        # 2. 安装 msd_lite（luci-app-msd_lite 依赖）
+        # 先查找 msd_lite 所在的 feeds（通常在 packages 或 luci 中）
+        if ./scripts/feeds list | grep -q "msd_lite"; then
+          ./scripts/feeds install -a msd_lite
+        else
+          # 若 feeds 中没有，从 immortalwrt 仓库克隆（适配你的源码）
+          git clone --depth=1 https://github.com/immortalwrt/packages package/immortalwrt-packages
+          mv -f package/immortalwrt-packages/net/msd_lite package/
+          rm -rf package/immortalwrt-packages
+          echo "已手动克隆 msd_lite 到 package 目录"
+        fi
+        # 验证包是否安装成功
+        echo "=== 验证依赖包是否存在 ==="
+        [ -d "feeds/packages/libs/pcre" ] && echo "libpcre 包存在" || echo "libpcre 包缺失"
+        [ -d "package/msd_lite" ] || [ -d "feeds/packages/net/msd_lite" ] && echo "msd_lite 包存在" || echo "msd_lite 包缺失"
+        
     - name: Load Custom Configuration
       run: |
         [ -e files ] && mv files $OPENWRT_PATH/files
@@ -177,23 +198,21 @@ jobs:
         $GITHUB_WORKSPACE/scripts/preset-clash-core.sh $CLASH_KERNEL
         $GITHUB_WORKSPACE/scripts/preset-terminal-tools.sh
 
-    - name: Enable Required Dependencies (ncursesw/libpcre)
+    - name: Enable Required Dependencies (ncursesw/libpcre/msd_lite)
       run: |
         cd $OPENWRT_PATH
-        # 启用 ncurses 及 ncursesw（宽字符支持）
+        # 启用依赖配置（包已安装，配置才有效）
         echo "CONFIG_PACKAGE_ncurses=y" >> .config
         echo "CONFIG_PACKAGE_ncursesw=y" >> .config
-        # 解决 ssr-plus 依赖警告
         echo "CONFIG_PACKAGE_libpcre=y" >> .config
-        # 解决 luci-app-msd_lite 依赖警告
         echo "CONFIG_PACKAGE_msd_lite=y" >> .config
         # 应用配置
         make defconfig
-        # 验证配置
+        # 优化验证：用 grep -q 避免无结果时退出
         echo "=== 依赖配置验证结果 ==="
-        grep "CONFIG_PACKAGE_ncursesw" .config
-        grep "CONFIG_PACKAGE_libpcre" .config
-        grep "CONFIG_PACKAGE_msd_lite" .config
+        grep -q "CONFIG_PACKAGE_ncursesw=y" .config && echo "✅ ncursesw 已启用" || echo "❌ ncursesw 未启用"
+        grep -q "CONFIG_PACKAGE_libpcre=y" .config && echo "✅ libpcre 已启用" || echo "❌ libpcre 未启用"
+        grep -q "CONFIG_PACKAGE_msd_lite=y" .config && echo "✅ msd_lite 已启用" || echo "❌ msd_lite 未启用"
 
     - name: Pre-Compile ncurses (Include ncursesw)
       run: |
