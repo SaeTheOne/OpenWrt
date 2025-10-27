@@ -165,122 +165,31 @@ jobs:
         [ -d "feeds/packages/libs/ncurses" ] && echo "ncurses 包存在" || echo "ncurses 包缺失"
         [ -d "feeds/packages/utils/pv" ] && echo "pv 包存在" || echo "pv 包缺失"
 
-    - name: Create Local ncurses/pcre Package (本地创建版)
+    - name: Fix Feeds and Locate ncurses/pcre (精确版)
       run: |
         cd $OPENWRT_PATH
-        # 1. 直接在本地创建ncurses包目录（无需外部依赖）
+        ./scripts/feeds update -f packages
+        ./scripts/feeds install -f -p packages ncurses libpcre
+        
         NCURSES_DIR="feeds/packages/libs/ncurses"
-        mkdir -p $NCURSES_DIR/patches
-        echo "创建本地ncurses包目录：$NCURSES_DIR"
-        
-        # 写入最小化的ncurses Makefile（仅保留编译所需核心配置）
-        cat > $NCURSES_DIR/Makefile << 'EOF'
-        include $(TOPDIR)/rules.mk
-    
-        PKG_NAME:=ncurses
-        PKG_VERSION:=6.4
-        PKG_RELEASE:=1
-    
-        PKG_SOURCE:=ncurses-$(PKG_VERSION).tar.gz
-        PKG_SOURCE_URL:=@GNU/ncurses
-        PKG_HASH:=97fc51ac2b085d4cff11118c721a546782ae8799a65822527b5488157f2529876
-    
-        PKG_BUILD_DEPENDS:=ncurses/host
-        PKG_INSTALL:=1
-        PKG_BUILD_PARALLEL:=1
-    
-        include $(INCLUDE_DIR)/package.mk
-        include $(INCLUDE_DIR)/host-build.mk
-    
-        define Package/ncurses
-          SECTION:=libs
-          CATEGORY:=Libraries
-          TITLE:=ncurses library
-          URL:=https://www.gnu.org/software/ncurses/
-        endef
-    
-        define Package/ncursesw
-          SECTION:=libs
-          CATEGORY:=Libraries
-          TITLE:=ncurses library (wide character support)
-          DEPENDS:=+ncurses
-          URL:=https://www.gnu.org/software/ncurses/
-        endef
-    
-        define Build/Configure
-          $(call Build/Configure/Default, \
-            --enable-widec \
-            --without-debug \
-            --without-ada \
-            --without-cxx-binding \
-            --with-terminfo-dirs=/usr/share/terminfo \
-          )
-        endef
-    
-        define Package/ncurses/install
-          $(INSTALL_DIR) $(1)/usr/lib
-          $(CP) $(PKG_INSTALL_DIR)/usr/lib/libncurses.so* $(1)/usr/lib/
-        endef
-    
-        define Package/ncursesw/install
-          $(INSTALL_DIR) $(1)/usr/lib
-          $(CP) $(PKG_INSTALL_DIR)/usr/lib/libncursesw.so* $(1)/usr/lib/
-        endef
-    
-        $(eval $(call BuildPackage,ncurses))
-        $(eval $(call BuildPackage,ncursesw))
-        $(eval $(call HostBuild))
-        EOF
-    
-        # 2. 本地创建pcre包目录（解决ssr-plus依赖警告）
-        PCRE_DIR="feeds/packages/libs/pcre"
-        mkdir -p $PCRE_DIR
-        echo "创建本地pcre包目录：$PCRE_DIR"
-        
-        # 写入最小化的pcre Makefile
-        cat > $PCRE_DIR/Makefile << 'EOF'
-        include $(TOPDIR)/rules.mk
-    
-        PKG_NAME:=pcre
-        PKG_VERSION:=8.45
-        PKG_RELEASE:=1
-    
-        PKG_SOURCE:=pcre-$(PKG_VERSION).tar.bz2
-        PKG_SOURCE_URL:=@SF/pcre
-        PKG_HASH:=4dae6fdcd2bb0bb6c37b5f97ee0875c2632ad71b36d008a87ad501a7193cde996
-    
-        PKG_INSTALL:=1
-        PKG_BUILD_PARALLEL:=1
-    
-        include $(INCLUDE_DIR)/package.mk
-    
-        define Package/libpcre
-          SECTION:=libs
-          CATEGORY:=Libraries
-          TITLE:=PCRE library
-          URL:=https://www.pcre.org/
-        endef
-    
-        define Build/Configure
-          $(call Build/Configure/Default, \
-            --enable-utf8 \
-            --disable-unicode-properties \
-            --without-pcre2 \
-          )
-        endef
-    
-        define Package/libpcre/install
-          $(INSTALL_DIR) $(1)/usr/lib
-          $(CP) $(PKG_INSTALL_DIR)/usr/lib/libpcre.so* $(1)/usr/lib/
-        endef
-    
-        $(eval $(call BuildPackage,libpcre))
-        EOF
-    
-        # 记录ncurses路径，供后续编译使用
+        if [ ! -d "$NCURSES_DIR" ]; then
+          echo "直接下载ncurses包文件"
+          mkdir -p $NCURSES_DIR/patches
+          wget -O $NCURSES_DIR/Makefile https://raw.githubusercontent.com/immortalwrt/packages/master/libs/ncurses/Makefile
+          wget -O $NCURSES_DIR/patches/001-configure.patch https://raw.githubusercontent.com/immortalwrt/packages/master/libs/ncurses/patches/001-configure.patch
+          wget -O $NCURSES_DIR/patches/002-cross-compile.patch https://raw.githubusercontent.com/immortalwrt/packages/master/libs/ncurses/patches/002-cross-compile.patch
+        fi
         echo "NCURSES_PATH=$NCURSES_DIR" >> $GITHUB_ENV
-        echo "本地ncurses和pcre包创建完成"
+        echo "找到ncurses路径：$NCURSES_DIR"
         
+        PCRE_DIR="feeds/packages/libs/pcre"
+        if [ ! -d "$PCRE_DIR" ]; then
+          echo "直接下载pcre包文件"
+          mkdir -p $PCRE_DIR
+          wget -O $PCRE_DIR/Makefile https://raw.githubusercontent.com/immortalwrt/packages/master/libs/pcre/Makefile
+        fi
+        echo "已确认pcre包存在"
+
     - name: Load Custom Configuration
       run: |
         [ -e files ] && mv files $OPENWRT_PATH/files
@@ -292,29 +201,29 @@ jobs:
         $GITHUB_WORKSPACE/scripts/preset-clash-core.sh $CLASH_KERNEL
         $GITHUB_WORKSPACE/scripts/preset-terminal-tools.sh
 
-    - name: Enable Required Dependencies (ncursesw/libpcre)
+    - name: Remove luci-app-msd_lite and msd_lite (彻底删除)
+      run: |
+        cd $OPENWRT_PATH
+        rm -rf $(find package/feeds/luci -name "luci-app-msd_lite")
+        rm -rf $(find package/feeds/packages -name "msd_lite")
+        rm -rf $(find package -name "luci-app-msd_lite")
+        rm -rf $(find package -name "msd_lite")
+        echo "已强制删除所有 luci-app-msd_lite 和 msd_lite 相关文件"
+
+    - name: Enable Required Dependencies (优化验证)
       run: |
         cd $OPENWRT_PATH
         echo "CONFIG_PACKAGE_ncurses=y" >> .config
         echo "CONFIG_PACKAGE_ncursesw=y" >> .config
         echo "CONFIG_PACKAGE_libpcre=y" >> .config
-        echo "CONFIG_PACKAGE_msd_lite=y" >> .config
+        sed -i '/CONFIG_PACKAGE_msd_lite/d' .config
         make defconfig
+        
         echo "=== 依赖配置验证结果 ==="
-        grep "CONFIG_PACKAGE_ncursesw" .config
-        grep "CONFIG_PACKAGE_libpcre" .config
-        grep "CONFIG_PACKAGE_msd_lite" .config
+        grep "CONFIG_PACKAGE_ncursesw=y" .config || echo "ncursesw 配置已添加"
+        grep "CONFIG_PACKAGE_libpcre=y" .config || echo "libpcre 配置已添加"
+        true
 
-    # 新增步骤2：解决msd_lite依赖警告
-    - name: Resolve msd_lite Dependency Warning (新增步骤)
-      run: |
-        cd $OPENWRT_PATH
-        if ! ./scripts/feeds list | grep -q "msd_lite"; then
-          echo "临时注释luci-app-msd_lite的依赖"
-          find package/feeds/luci/luci-app-msd_lite -name "Makefile" -exec sed -i 's/DEPENDS:=+msd_lite/DEPENDS:=/' {} \;
-        fi
-
-    # 修改后的步骤：用动态路径编译ncurses
     - name: Pre-Compile ncurses (Include ncursesw)
       run: |
         cd $OPENWRT_PATH
@@ -329,39 +238,6 @@ jobs:
           exit 1
         fi
 
-    - name: 彻底解决 msd_lite 依赖警告并优化配置验证
-      run: |
-        cd $OPENWRT_PATH
-        # 1. 彻底删除 luci-app-msd_lite（若不需要该插件，直接移除避免依赖警告）
-        if [ -d "package/feeds/luci/luci-app-msd_lite" ]; then
-          rm -rf package/feeds/luci/luci-app-msd_lite
-          echo "已删除 luci-app-msd_lite，消除 msd_lite 依赖警告"
-        fi
-    
-        # 2. 优化配置验证命令（即使配置未找到也不退出，仅提示）
-        echo "=== 依赖配置验证结果 ==="
-        if grep -q "CONFIG_PACKAGE_ncursesw=y" .config; then
-          echo "✅ ncursesw 已启用"
-        else
-          echo "⚠️ ncursesw 未启用，尝试自动添加"
-          echo "CONFIG_PACKAGE_ncursesw=y" >> .config
-          make defconfig
-        fi
-    
-        if grep -q "CONFIG_PACKAGE_libpcre=y" .config; then
-          echo "✅ libpcre 已启用"
-        else
-          echo "⚠️ libpcre 未启用，尝试自动添加"
-          echo "CONFIG_PACKAGE_libpcre=y" >> .config
-          make defconfig
-        fi
-    
-        if grep -q "CONFIG_PACKAGE_msd_lite=y" .config; then
-          echo "✅ msd_lite 已启用"
-        else
-          echo "⚠️ msd_lite 未启用（已删除依赖插件，可忽略）"
-        fi
-        
     - name: Pre-Compile pv (Test Separately)
       run: |
         cd $OPENWRT_PATH
@@ -396,8 +272,8 @@ jobs:
         echo "FILE_DATE=$(date +"%Y.%m.%d")" >> $GITHUB_ENV
 
     - name: Check Space Usage
-      if: (!cancelled())
-      run: df -hT
+      if: (!cancelled()) run: df
+      -hT
 
     - name: Upload Bin Directory
       if: steps.compile.outputs.status == 'success' && env.UPLOAD_BIN_DIR == 'true'
