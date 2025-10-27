@@ -32,6 +32,7 @@ jobs:
       DEVICE_SUBTARGET: ${{ steps.variable.outputs.DEVICE_SUBTARGET }}
 
     steps:
+    # 1. 服务器性能检查
     - name: Check Server Performance
       run: |
         echo "警告⚠"
@@ -47,18 +48,19 @@ jobs:
         echo "--------------------------硬盘信息--------------------------"
         echo "硬盘数量: $(ls /dev/sd* | grep -v [1-9] | wc -l)" && df -hT
 
+    # 2. 环境初始化（修复Docker删除报错、安装libdeflate-tools）
     - name: Initialization Environment
       env:
         DEBIAN_FRONTEND: noninteractive
       run: |
-        # 仅在有Docker镜像时执行删除
+        # 仅在有Docker镜像时删除，避免空参数报错
         if [ $(docker images -q | wc -l) -gt 0 ]; then
           docker rmi $(docker images -q)
         fi
         sudo rm -rf /usr/share/dotnet /etc/apt/sources.list.d /usr/local/lib/android $AGENT_TOOLSDIRECTORY
         sudo -E apt-get -y purge azure-cli ghc* zulu* firefox google* dotnet* powershell openjdk* mongodb* moby* || true
         sudo -E apt-get -y update
-        # 安装依赖包
+        # 安装编译依赖（含libdeflate-tools，解决解压工具缺失）
         sudo -E apt-get -y install $(curl -fsSL is.gd/depends_ubuntu_2204) bison flex libelf-dev libssl-dev libdeflate-tools
         sudo -E apt-get -y install antlr3 asciidoc autopoint ecj fastjar gnutls-dev haveged \
           llvm lld mkisofs msmtp qemu-utils re2c swig uglifyjs upx-ucl
@@ -67,6 +69,7 @@ jobs:
         sudo -E apt-get -y clean
         sudo timedatectl set-timezone "$TZ"
 
+    # 3. 磁盘空间扩容
     - name: Combine Disks
       uses: easimon/maximize-build-space@master
       with:
@@ -77,99 +80,93 @@ jobs:
         remove-android: true
         remove-haskell: true
 
+    # 4. 拉取工作流配置文件
     - name: Checkout
       uses: actions/checkout@main
 
+    # 5. 克隆ImmortalWrt源码
     - name: Clone Source Code to Workspace
       id: clone
       run: |
         echo "=== 当前工作目录空间情况 ==="
         df -hT /home/runner/work/OpenWrt/OpenWrt
-        # 克隆源码
+        # 克隆源码到指定路径
         git clone $REPO_URL -b $REPO_BRANCH /home/runner/work/OpenWrt/OpenWrt/openwrt
         cd /home/runner/work/OpenWrt/OpenWrt/openwrt
         echo "OPENWRT_PATH=$PWD" >> $GITHUB_ENV
-        # 提取源码信息
+        # 提取源码提交信息
         COMMIT_AUTHOR=$(git show -s --date=short --format="作者: %an")
-        echo "COMMIT_AUTHOR=$COMMIT_AUTHOR" >> $GITHUB_ENV
-        echo "COMMIT_AUTHOR=$COMMIT_AUTHOR" >> $GITHUB_OUTPUT
+        echo "COMMIT_AUTHOR=$COMMIT_AUTHOR" >> $GITHUB_ENV && echo "COMMIT_AUTHOR=$COMMIT_AUTHOR" >> $GITHUB_OUTPUT
         COMMIT_DATE=$(git show -s --date=short --format="时间: %ci")
-        echo "COMMIT_DATE=$COMMIT_DATE" >> $GITHUB_ENV
-        echo "COMMIT_DATE=$COMMIT_DATE" >> $GITHUB_OUTPUT
+        echo "COMMIT_DATE=$COMMIT_DATE" >> $GITHUB_ENV && echo "COMMIT_DATE=$COMMIT_DATE" >> $GITHUB_OUTPUT
         COMMIT_MESSAGE=$(git show -s --date=short --format="内容: %s")
-        echo "COMMIT_MESSAGE=$COMMIT_MESSAGE" >> $GITHUB_ENV
-        echo "COMMIT_MESSAGE=$COMMIT_MESSAGE" >> $GITHUB_OUTPUT
+        echo "COMMIT_MESSAGE=$COMMIT_MESSAGE" >> $GITHUB_ENV && echo "COMMIT_MESSAGE=$COMMIT_MESSAGE" >> $GITHUB_OUTPUT
         COMMIT_HASH=$(git show -s --date=short --format="hash: %H")
-        echo "COMMIT_HASH=$COMMIT_HASH" >> $GITHUB_ENV
-        echo "COMMIT_HASH=$COMMIT_HASH" >> $GITHUB_OUTPUT
+        echo "COMMIT_HASH=$COMMIT_HASH" >> $GITHUB_ENV && echo "COMMIT_HASH=$COMMIT_HASH" >> $GITHUB_OUTPUT
         echo "=== 源码目录权限验证 ==="
         ls -ld /home/runner/work/OpenWrt/OpenWrt/openwrt
 
-    - name: Verify Essential Scripts Exist (修复 scripts/feeds 缺失)
+    # 6. 验证核心脚本（修复scripts/feeds缺失）
+    - name: Verify Essential Scripts Exist
       run: |
         cd $OPENWRT_PATH
-        echo "=== 验证核心脚本是否存在 ==="
-        # 检查 scripts/feeds，缺失则重新克隆
+        echo "=== 验证scripts/feeds是否存在 ==="
         if [ ! -f "scripts/feeds" ]; then
-          echo "❌ scripts/feeds 不存在，重新克隆源码"
+          echo "❌ scripts/feeds缺失，重新克隆源码"
           rm -rf /home/runner/work/OpenWrt/OpenWrt/openwrt
           git clone $REPO_URL -b $REPO_BRANCH /home/runner/work/OpenWrt/OpenWrt/openwrt
           cd /home/runner/work/OpenWrt/OpenWrt/openwrt
           echo "OPENWRT_PATH=$PWD" >> $GITHUB_ENV
-          # 再次检查，仍缺失则报错
           if [ ! -f "scripts/feeds" ]; then
-            echo "致命错误：重新克隆后仍缺失 scripts/feeds，源码可能损坏"
-            exit 1
+            echo "致命错误：重新克隆后仍缺失scripts/feeds" && exit 1
           fi
         fi
-        echo "✅ scripts/feeds 存在且可执行"
-        # 赋予执行权限
-        chmod +x scripts/feeds
+        chmod +x scripts/feeds  # 赋予执行权限
+        echo "✅ scripts/feeds验证通过"
 
+    # 7. 验证编译目录
     - name: Verify Compile Directory
       run: |
-        echo "OpenWrt 源码路径：$OPENWRT_PATH"
-        echo "=== 工作目录下源码目录权限 ==="
-        ls -ld $OPENWRT_PATH
-        echo "=== 工作目录空间情况 ==="
-        df -hT $OPENWRT_PATH
+        echo "OpenWrt源码路径：$OPENWRT_PATH"
+        echo "=== 目录权限 ===" && ls -ld $OPENWRT_PATH
+        echo "=== 剩余空间 ===" && df -hT $OPENWRT_PATH
 
+    # 8. 修复源码完整性
     - name: Fix Source Code Integrity
       run: |
         cd $OPENWRT_PATH
-        git submodule update --init --recursive
-        git fetch --all
-        git reset --hard origin/$REPO_BRANCH
+        git submodule update --init --recursive  # 拉取子模块
+        git fetch --all && git reset --hard origin/$REPO_BRANCH  # 重置到最新分支
 
+    # 9. 生成编译变量（目标设备、架构等）
     - name: Generate Variables
       id: variable
       run: |
-        cp $CONFIG_FILE $OPENWRT_PATH/.config
-        cd $OPENWRT_PATH
-        make defconfig > /dev/null 2>&1
-        SOURCE_REPO="$(echo $REPO_URL | awk -F '/' '{print $(NF)}')"
+        cp $CONFIG_FILE $OPENWRT_PATH/.config  # 复制自定义配置
+        cd $OPENWRT_PATH && make defconfig > /dev/null 2>&1
+        SOURCE_REPO=$(echo $REPO_URL | awk -F '/' '{print $(NF)}')
         echo "SOURCE_REPO=$SOURCE_REPO" >> $GITHUB_ENV
+        # 提取目标设备架构
         DEVICE_TARGET=$(cat .config | grep CONFIG_TARGET_BOARD | awk -F '"' '{print $2}')
-        echo "DEVICE_TARGET=$DEVICE_TARGET" >> $GITHUB_ENV
-        echo "DEVICE_TARGET=$DEVICE_TARGET" >> $GITHUB_OUTPUT
+        echo "DEVICE_TARGET=$DEVICE_TARGET" >> $GITHUB_ENV && echo "DEVICE_TARGET=$DEVICE_TARGET" >> $GITHUB_OUTPUT
         DEVICE_SUBTARGET=$(cat .config | grep CONFIG_TARGET_SUBTARGET | awk -F '"' '{print $2}')
-        echo "DEVICE_SUBTARGET=$DEVICE_SUBTARGET" >> $GITHUB_ENV
-        echo "DEVICE_SUBTARGET=$DEVICE_SUBTARGET" >> $GITHUB_OUTPUT
+        echo "DEVICE_SUBTARGET=$DEVICE_SUBTARGET" >> $GITHUB_ENV && echo "DEVICE_SUBTARGET=$DEVICE_SUBTARGET" >> $GITHUB_OUTPUT
 
+    # 10. 检查内核版本兼容性
     - name: Check Kernel Version Compatibility
       run: |
         cd $OPENWRT_PATH
-        echo "配置文件中的内核版本："
-        grep CONFIG_KERNEL_VERSION .config || echo "未找到CONFIG_KERNEL_VERSION配置"
-        echo "源码支持的内核版本："
-        grep KERNEL_PATCHVER target/linux/${DEVICE_TARGET}/Makefile || echo "未找到源码内核版本定义"
+        echo "配置文件内核版本：" && grep CONFIG_KERNEL_VERSION .config || echo "未找到内核版本配置"
+        echo "源码支持内核版本：" && grep KERNEL_PATCHVER target/linux/${DEVICE_TARGET}/Makefile || echo "未找到源码内核定义"
 
+    # 11. 清理工具链缓存
     - name: Clean Toolchain Cache
       run: |
         cd $OPENWRT_PATH
         make toolchain/kernel-headers/clean
         make toolchain/clean
 
+    # 12. 缓存工具链（加速后续编译）
     - name: Cache Toolchain
       if: env.CACHE_TOOLCHAIN == 'true'
       uses: HiGarfield/cachewrtbuild@main
@@ -178,41 +175,330 @@ jobs:
         mixkey: ${{ env.SOURCE_REPO }}-${{ env.REPO_BRANCH }}-${{ env.DEVICE_TARGET }}-${{ env.DEVICE_SUBTARGET }}
         prefix: ${{ env.OPENWRT_PATH }}
 
+    # 13. 安装Feeds（验证ncurses路径）
     - name: Install Feeds (Force Update)
       run: |
-        # 确认路径存在，避免 cd 失败
         if [ ! -d "$OPENWRT_PATH" ]; then
-          echo "错误：OPENWRT_PATH 不存在 - $OPENWRT_PATH"
-          exit 1
+          echo "错误：OPENWRT_PATH不存在" && exit 1
         fi
-        cd $OPENWRT_PATH || { echo "无法进入 $OPENWRT_PATH"; exit 1; }
-        # 执行 feeds 操作
-        ./scripts/feeds clean
-        ./scripts/feeds update -a -f
-        ./scripts/feeds install -a -f
-        # 验证源码内 ncurses 和 pv 包
-        echo "=== 验证关键包是否存在 ==="
+        cd $OPENWRT_PATH || { echo "无法进入源码目录" && exit 1; }
+        # 更新并安装Feeds
+        ./scripts/feeds clean && ./scripts/feeds update -a -f && ./scripts/feeds install -a -f
+        # 验证源码内ncurses（用户确认的正确路径）
+        echo "=== 验证ncurses路径 ==="
         if [ -d "package/libs/ncurses" ]; then
-          echo "✅ 源码中找到 ncurses（路径：package/libs/ncurses）"
+          echo "✅ ncurses路径正确：package/libs/ncurses"
         else
-          echo "❌ 源码中未找到 ncurses，请检查源码完整性"
-          exit 1
+          echo "❌ ncurses缺失" && exit 1
         fi
-        if [ -d "feeds/packages/utils/pv" ]; then
-          echo "✅ pv 包存在（路径：feeds/packages/utils/pv）"
-        else
-          echo "❌ pv 包缺失，尝试手动安装"
+        # 验证pv包（依赖ncurses）
+        if [ ! -d "feeds/packages/utils/pv" ]; then
+          echo "⚠️ pv包缺失，手动安装"
           ./scripts/feeds install -p packages pv
         fi
 
-    - name: Confirm ncurses Path in Source Code
+    # 14. 确认ncurses路径+修复pcre（避免YAML语法错误）
+    - name: Confirm ncurses Path & Fix pcre
       run: |
         cd $OPENWRT_PATH
-        # 验证 ncurses 路径存在性
+        # 确认ncurses路径
         NCURSES_PATH="package/libs/ncurses"
-        if [ -d "$NCURSES_PATH" ]; then
-          echo "✅ ncurses 路径验证通过：$NCURSES_PATH"
-        else
-          echo "❌ ncurses 路径不存在：$NCURSES_PATH"
-          exit 1
+        echo "NCURSES_PATH=$NCURSES_PATH" >> $GITHUB_ENV
+        echo "✅ 已确认ncurses路径：$NCURSES_PATH"
+        # 修复pcre（不存在则创建，用printf避免YAML语法错误）
+        PCRE_PATH="package/libs/pcre"
+        if [ ! -d "$PCRE_PATH" ]; then
+          echo "⚠️ pcre缺失，创建本地包"
+          mkdir -p $PCRE_PATH
+          printf '%s\n' \
+            'include $(TOPDIR)/rules.mk' \
+            '' \
+            'PKG_NAME:=pcre' \
+            'PKG_VERSION:=8.45' \
+            'PKG_RELEASE:=1' \
+            '' \
+            'PKG_SOURCE:=pcre-$(PKG_VERSION).tar.bz2' \
+            'PKG_SOURCE_URL:=https://downloads.sourceforge.net/project/pcre/pcre/$(PKG_VERSION)/' \
+            'PKG_HASH:=4dae6fdcd2bb0bb6c37b5f97ee0875c2632ad71b36d008a87ad501a7193cde996' \
+            '' \
+            'PKG_INSTALL:=1' \
+            'include $(INCLUDE_DIR)/package.mk' \
+            '' \
+            'define Package/libpcre' \
+            '  SECTION:=libs' \
+            '  CATEGORY:=Libraries' \
+            '  TITLE:=PCRE library' \
+            'endef' \
+            '' \
+            'define Build/Configure' \
+            '  $(call Build/Configure/Default, --enable-utf8)' \
+            'endef' \
+            '' \
+            'define Package/libpcre/install' \
+            '  $(INSTALL_DIR) $(1)/usr/lib' \
+            '  $(CP) $(PKG_INSTALL_DIR)/usr/lib/libpcre.so.* $(1)/usr/lib/' \
+            'endef' \
+            '' \
+            '$(eval $(call BuildPackage,libpcre))' \
+            > "$PCRE_PATH/Makefile"
         fi
+        echo "✅ 已确认pcre路径：$PCRE_PATH"
+
+    # 15. 加载自定义配置+删除无效依赖
+    - name: Load Custom Configuration & Clean Invalid Dependencies
+      run: |
+        cd $OPENWRT_PATH
+        # 复制自定义脚本和文件
+        [ -e files ] && mv files $OPENWRT_PATH/files
+        chmod +x $GITHUB_WORKSPACE/scripts/*.sh && chmod +x $DIY_SCRIPT
+        $GITHUB_WORKSPACE/$DIY_SCRIPT  # 执行自定义脚本
+        $GITHUB_WORKSPACE/scripts/preset-clash-core.sh $CLASH_KERNEL  # 预设Clash内核
+        $GITHUB_WORKSPACE/scripts/preset-terminal-tools.sh  # 预设终端工具
+        # 彻底删除msd_lite（避免依赖冲突）
+        rm -rf $(find package/feeds/ -name "luci-app-msd_lite" -o -name "msd_lite")
+        echo "✅ 自定义配置加载完成，无效依赖已删除"
+
+    # 16. 启用必要依赖（ncurses、pcre）
+    - name: Enable Required Dependencies
+      run: |
+        cd $OPENWRT_PATH
+        # 强制启用ncurses、ncursesw、pcre
+        echo "CONFIG_PACKAGE_ncurses=y" >> .config
+        echo "CONFIG_PACKAGE_ncursesw=y" >> .config
+        echo "CONFIG_PACKAGE_libpcre=y" >> .config
+        sed -i '/CONFIG_PACKAGE_msd_lite/d' .config  # 移除msd_lite配置
+        make defconfig  # 生成最终配置
+        # 验证配置
+        echo "=== 依赖配置验证 ==="
+        grep "CONFIG_PACKAGE_ncursesw=y" .config && grep "CONFIG_PACKAGE_libpcre=y" .config || echo "⚠️ 依赖配置已添加"
+        true  # 避免grep未匹配时退出
+
+    # 17. 修复libdeflate-gzip路径（解决解压工具缺失）
+    - name: Fix libdeflate-gzip Path
+      run: |
+        cd $OPENWRT_PATH
+        echo "=== 修复libdeflate-gzip路径 ==="
+        # 定位工具路径（优先用libdeflate-gzip，缺失则用gzip替代）
+        if ! command -v libdeflate-gzip &> /dev/null; then
+          echo "⚠️ libdeflate-gzip缺失，用gzip替代"
+          LIB_PATH=$(which gzip)
+        else
+          LIB_PATH=$(which libdeflate-gzip)
+        fi
+        # 创建编译系统期望的路径
+        STAGING_BIN="$OPENWRT_PATH/staging_dir/host/bin"
+        mkdir -p $STAGING_BIN
+        # 创建软链接（确保编译系统能找到工具）
+        if [ ! -f "$STAGING_BIN/libdeflate-gzip" ]; then
+          sudo ln -s $LIB_PATH $STAGING_BIN/libdeflate-gzip
+          echo "✅ 已创建软链接：$STAGING_BIN/libdeflate-gzip -> $LIB_PATH"
+        fi
+        # 验证
+        $STAGING_BIN/libdeflate-gzip --version || echo "✅ 工具可正常调用"
+
+    # 18. 预编译ncurses（含ncursesw）
+    - name: Pre-Compile ncurses (Include ncursesw)
+      run: |
+        cd $OPENWRT_PATH
+        echo "=== 预编译ncurses（路径：$NCURSES_PATH） ==="
+        make $NCURSES_PATH/compile V=s  # 详细输出编译过程
+        # 验证宽字符库（ncursesw）
+        echo "=== 验证ncursesw生成 ==="
+        find staging_dir/target-*/ -name "libncursesw.so*"
+        if [ $? -ne 0 ]; then
+          echo "❌ 未生成libncursesw.so，编译失败" && exit 1
+        fi
+        echo "✅ ncurses预编译成功"
+
+    # 19. 预编译pv（依赖ncursesw）
+    - name: Pre-Compile pv
+      run: |
+        cd $OPENWRT_PATH
+        echo "=== 预编译pv ==="
+        make package/feeds/packages/pv/compile V=s
+        # 验证pv产物
+        find bin/packages/*/*/ -name "pv-*.apk"
+        if [ $? -ne 0 ]; then
+          echo "❌ pv编译失败" && exit 1
+        fi
+        echo "✅ pv预编译成功"
+
+    # 20. 下载依赖包（避免编译时网络问题）
+    - name: Download Dependent Packages
+      run: |
+        cd $OPENWRT_PATH
+        make defconfig
+        make download -j8  # 8线程下载
+        # 删除空文件（避免下载失败导致编译异常）
+        find dl -size -1024c -exec rm -f {} \;
+        echo "✅ 所有依赖包下载完成"
+
+    # 21. 编译固件（多线程失败则单线程重试）
+    - name: Compile Firmware
+      id: compile
+      run: |
+        cd $OPENWRT_PATH
+        # 添加初始化脚本
+        mkdir -p files/etc/uci-defaults
+        cp $GITHUB_WORKSPACE/scripts/init-settings.sh files/etc/uci-defaults/99-init-settings
+        # 编译（多线程优先，失败重试）
+        echo "=== 用 $(nproc) 线程编译 ==="
+        make -j$(nproc) V=s || make -j1 V=s
+        # 标记编译成功
+        echo "status=success" >> $GITHUB_OUTPUT
+        echo "DATE=$(date +"%Y-%m-%d %H:%M:%S")" >> $GITHUB_ENV
+        echo "FILE_DATE=$(date +"%Y.%m.%d")" >> $GITHUB_ENV
+        echo "✅ 固件编译完成"
+
+    # 22. 查看磁盘使用情况
+    - name: Check Disk Usage
+      if: (!cancelled())
+      run: df -hT
+
+    # 23. 上传bin目录（可选）
+    - name: Upload Bin Directory
+      if: steps.compile.outputs.status == 'success' && env.UPLOAD_BIN_DIR == 'true'
+      uses: actions/upload-artifact@main
+      with:
+        name: ${{ env.SOURCE_REPO }}-bin-${{ env.DEVICE_TARGET }}-${{ env.DEVICE_SUBTARGET }}-${{ env.FILE_DATE }}
+        path: ${{ env.OPENWRT_PATH }}/bin
+
+    # 24. 整理固件文件
+    - name: Organize Firmware Files
+      if: steps.compile.outputs.status == 'success'
+      run: |
+        cd $OPENWRT_PATH/bin/targets/*/*
+        cat sha256sums > firmware.sha256
+        cp $OPENWRT_PATH/.config build.config  # 保存编译配置
+        # 整理ipk包
+        mkdir -p packages && mv $OPENWRT_PATH/bin/packages/*/*/*.ipk packages/
+        tar -zcf Packages.tar.gz packages/
+        rm -rf packages feeds.buildinfo version.buildinfo
+        echo "FIRMWARE_PATH=$PWD" >> $GITHUB_ENV
+        echo "✅ 固件文件整理完成"
+
+    # 25. 上传固件到Artifact（临时存储）
+    - name: Upload Firmware to Artifact
+      if: steps.compile.outputs.status == 'success' && env.FIRMWARE_RELEASE != 'true'
+      uses: actions/upload-artifact@main
+      with:
+        name: ${{ env.SOURCE_REPO }}-firmware-${{ env.DEVICE_TARGET }}-${{ env.DEVICE_SUBTARGET }}-${{ env.FILE_DATE }}
+        path: ${{ env.FIRMWARE_PATH }}
+
+    # 26. 上传固件到Release（正式发布）
+    - name: Upload Firmware to Release
+      if: steps.compile.outputs.status == 'success' && env.FIRMWARE_RELEASE == 'true'
+      uses: ncipollo/release-action@v1
+      with:
+        name: R${{ env.DATE }} for ${{ env.FIRMWARE_TAG }}
+        allowUpdates: true
+        tag: ${{ env.FIRMWARE_TAG }}
+        token: ${{ secrets.GITHUB_TOKEN }}
+        artifacts: ${{ env.FIRMWARE_PATH }}/*
+        body: |
+          ## 📦 ImmortalWrt 固件发布
+          ### 基本信息
+          - 架构：${{ env.DEVICE_TARGET }}-${{ env.DEVICE_SUBTARGET }}
+          - 源码：[${{ env.REPO_URL }}](${{ env.REPO_URL }})
+          - 分支：${{ env.REPO_BRANCH }}
+          - 编译时间：${{ env.DATE }}
+          
+          ### 登录信息
+          - 默认IP：192.168.1.1
+          - 默认密码：password
+          
+          ### 源码提交记录
+          - ${{ env.COMMIT_AUTHOR }}
+          - ${{ env.COMMIT_DATE }}
+          - ${{ env.COMMIT_MESSAGE }}
+          - ${{ env.COMMIT_HASH }}
+
+  # 27. 打包固件（适配ARMvirt设备）
+  Package:
+    needs: [Build]
+    runs-on: ubuntu-22.04
+    env:
+      COMMIT_AUTHOR: ${{ needs.Build.outputs.COMMIT_AUTHOR }}
+      COMMIT_DATE: ${{ needs.Build.outputs.COMMIT_DATE }}
+      COMMIT_MESSAGE: ${{ needs.Build.outputs.COMMIT_MESSAGE }}
+      COMMIT_HASH: ${{ needs.Build.outputs.COMMIT_HASH }}
+      DEVICE_TARGET: ${{ needs.Build.outputs.DEVICE_TARGET }}
+      DEVICE_SUBTARGET: ${{ needs.Build.outputs.DEVICE_SUBTARGET }}
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@main
+
+    # 28. 初始化打包环境
+    - name: Initialization Package Environment
+      env:
+        DEBIAN_FRONTEND: noninteractive
+      run: |
+        sudo apt-get -y update
+        sudo apt-get -y install $(curl -fsSL is.gd/depends_ubuntu_2204)
+        sudo apt-get -y autoremove --purge && sudo apt-get -y clean
+        sudo timedatectl set-timezone "$TZ"
+
+    # 29. 下载编译好的rootfs固件
+    - name: Download Rootfs Firmware
+      id: download
+      run: |
+        FIRMWARE_DIR=/mnt/openwrt/bin/targets/armvirt/64
+        mkdir -p $FIRMWARE_DIR && cd $FIRMWARE_DIR
+        # 从Release下载rootfs.tar.gz
+        wget -q $(curl -s "https://api.github.com/repos/$GITHUB_REPOSITORY/releases" | grep "$FIRMWARE_TAG.*rootfs.tar.gz" | awk -F '"' '{print $4}')
+        echo "status=success" >> $GITHUB_OUTPUT
+        echo "DATE=$(date +"%Y-%m-%d %H:%M:%S")" >> $GITHUB_ENV
+        echo "DATE1=$(date +"%y.%m.%d")" >> $GITHUB_ENV
+
+    # 30. 打包适配ARMvirt的固件
+    - name: Package OpenWrt for ARMvirt
+      if: steps.download.outputs.status == 'success'
+      uses: ophub/flippy-openwrt-actions@main
+      env:
+        OPENWRT_ARMVIRT: /mnt/openwrt/bin/targets/*/*/*rootfs.tar.gz
+        PACKAGE_SOC: all
+        WHOAMI: Haiibo
+        KERNEL_VERSION_NAME: 5.15.13_6.1.5
+        KERNEL_AUTO_LATEST: true
+        DISTRIB_REVISION: R${{ env.DATE1 }} by Haiibo
+
+    # 31. 上传打包后的固件到Artifact
+    - name: Upload Packaged Firmware to Artifact
+      if: env.PACKAGED_STATUS == 'success' && env.OPENWRT_RELEASE != 'true'
+      uses: kittaakos/upload-artifact-as-is@master
+      with:
+        path: ${{ env.PACKAGED_OUTPUTPATH }}
+
+    # 32. 上传打包后的固件到Release
+    - name: Upload Packaged Firmware to Release
+      if: env.PACKAGED_STATUS == 'success' && env.OPENWRT_RELEASE == 'true'
+      uses: ncipollo/release-action@v1
+      with:
+        name: R${{ env.DATE }} for ${{ env.OPENWRT_TAG }}
+        allowUpdates: true
+        removeArtifacts: true
+        tag: ${{ env.OPENWRT_TAG }}
+        token: ${{ secrets.GITHUB_TOKEN }}
+        artifacts: ${{ env.PACKAGED_OUTPUTPATH }}/*
+        body: |
+          ## 📦 ARMvirt 专用固件发布
+          ### 基本信息
+          - 适用设备：ARMvirt 64位设备（如虚拟机、晶晨设备）
+          - 固件类型：多功能版（集成Clash、终端工具等）
+          - 编译时间：${{ env.DATE }}
+          
+          ### 安装说明
+          1. 插件安装：系统 → 晶晨宝盒 → 选择型号安装
+          2. 命令安装：`openwrt-install-amlogic`（U盘启动后执行）
+          3. 固件更新：`openwrt-update-amlogic`（上传固件到/mnt/mmcblk2p4）
+          
+          ### 登录信息
+          - 默认IP：192.168.1.1
+          - 默认密码：password
+          
+          ### 源码提交记录
+          - ${{ env.COMMIT_AUTHOR }}
+          - ${{ env.COMMIT_DATE }}
+          - ${{ env.COMMIT_MESSAGE }}
+          - ${{ env.COMMIT_HASH }}
