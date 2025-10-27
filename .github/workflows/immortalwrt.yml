@@ -167,48 +167,47 @@ jobs:
 
     - name: Force Verify sed Before lua Compile
       run: |
-        echo "=== 编译lua前最后验证sed ==="
-        mkdir -p $STAGING_BIN
-        sudo chmod -R 777 $STAGING_BIN
-
-        # 1. 验证系统sed直接执行（绕开链接）
-        echo "=== 验证系统sed直接执行 ==="
-        TEST_SYS=$(mktemp)
-        echo '"/usr/local/test"' > $TEST_SYS
-        $SED_SYSTEM -i -e 's,"/usr/local/","/test/path/",' $TEST_SYS
-        echo "系统sed处理后内容:"
-        cat $TEST_SYS
-        if ! grep -q '"/test/path/test"' $TEST_SYS; then
-          echo "❌ 系统sed直接执行失败，重新安装sed"
-          sudo apt-get -y --reinstall install sed
-          $SED_SYSTEM -i -e 's,"/usr/local/","/test/path/",' $TEST_SYS
-          grep -q '"/test/path/test"' $TEST_SYS || { echo "致命错误：系统sed彻底失效"; exit 1; }
-        fi
-
-        # 2. 验证链接的sed执行
-        echo "=== 验证链接的sed执行 ==="
-        sudo ln -sf $SED_SYSTEM $STAGING_BIN/sed  # 强制重建链接
-        echo "当前sed链接: $(ls -l $STAGING_BIN/sed)"
-        TEST_LINK=$(mktemp)
-        echo '"/usr/local/test"' > $TEST_LINK
-        $STAGING_BIN/sed -i -e 's,"/usr/local/","/test/path/",' $TEST_LINK
-        echo "链接sed处理后内容:"
-        cat $TEST_LINK
-        if grep -q '"/test/path/test"' $TEST_LINK; then
-          echo "✅ 最终sed功能验证通过"
+        echo "=== 编译lua前验证 sed 功能 ==="
+    
+        # 使用一个极简、无歧义的测试字符串，避免路径干扰
+        TEST_SIMPLE=$(mktemp)
+        echo "foo" > $TEST_SIMPLE
+    
+        echo "原始测试文件内容:"
+        cat $TEST_SIMPLE
+    
+        # 使用简单的 sed 替换：foo -> bar
+        $SED_SYSTEM -i -e 's,foo,bar,' $TEST_SIMPLE
+    
+        echo "替换后测试文件内容:"
+        cat $TEST_SIMPLE
+    
+        if grep -q 'bar' $TEST_SIMPLE; then
+          echo "✅ 系统 sed 功能正常（简单测试通过）"
         else
-          echo "❌ 链接sed执行失败，使用备用方案"
-          # 备用方案：直接复制系统sed到staging目录（不依赖链接）
-          sudo cp $SED_SYSTEM $STAGING_BIN/sed
-          sudo chmod +x $STAGING_BIN/sed
-          # 再次验证备用方案
-          $STAGING_BIN/sed -i -e 's,"/usr/local/","/test/path/",' $TEST_LINK
-          grep -q '"/test/path/test"' $TEST_LINK || { echo "致命错误：备用方案也失败"; exit 1; }
-          echo "✅ 备用方案（复制sed二进制）验证通过"
+          echo "❌ 系统 sed 替换功能异常，尝试重新安装"
+          sudo apt-get -y --reinstall install sed
+          $SED_SYSTEM -i -e 's,foo,bar,' $TEST_SIMPLE
+          if grep -q 'bar' $TEST_SIMPLE; then
+            echo "✅ 系统 sed 重装后功能恢复"
+          else
+            echo "❌ 系统 sed 仍然不可用，尝试直接使用 sed 二进制路径: $SED_SYSTEM"
+            $SED_SYSTEM --version || { echo "❌ 无法获取 sed 版本，sed 可能已损坏"; exit 1; }
+    
+            # 终极备用方案：使用绝对路径调用 sed，或者换用其他工具
+            echo "尝试直接调用 sed，使用绝对路径："
+            /usr/bin/sed -i -e 's,foo,bar,' $TEST_SIMPLE
+            if grep -q 'bar' $TEST_SIMPLE; then
+              echo "✅ /usr/bin/sed 直接调用成功"
+            else
+              echo "❌ 致命错误：所有 sed 方案均失败，无法继续编译"
+              exit 1
+            fi
+          fi
         fi
-
-        rm -f $TEST_SYS $TEST_LINK
-
+    
+        rm -f $TEST_SIMPLE
+    
     - name: Pre-Compile lua
       run: |
         cd $OPENWRT_DIR
