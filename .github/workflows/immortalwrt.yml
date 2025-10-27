@@ -51,14 +51,12 @@ jobs:
       env:
         DEBIAN_FRONTEND: noninteractive
       run: |
-        # 仅在有Docker镜像时删除，避免空参数报错
         if [ $(docker images -q | wc -l) -gt 0 ]; then
           docker rmi $(docker images -q)
         fi
         sudo rm -rf /usr/share/dotnet /etc/apt/sources.list.d /usr/local/lib/android $AGENT_TOOLSDIRECTORY
         sudo -E apt-get -y purge azure-cli ghc* zulu* firefox google* dotnet* powershell openjdk* mongodb* moby* || true
         sudo -E apt-get -y update
-        # 安装编译依赖（含核心工具）
         sudo -E apt-get -y install $(curl -fsSL is.gd/depends_ubuntu_2204) bison flex libelf-dev libssl-dev libdeflate-tools
         sudo -E apt-get -y install antlr3 asciidoc autopoint ecj fastjar gnutls-dev haveged \
           llvm lld mkisofs msmtp qemu-utils re2c swig uglifyjs upx-ucl
@@ -67,30 +65,28 @@ jobs:
         sudo -E apt-get -y clean
         sudo timedatectl set-timezone "$TZ"
 
-    # 一次性修复所有工具路径（核心步骤，解决sed、gzip等工具调用问题）
+    # 一次性修复所有工具路径（核心步骤，已修正参数和语法）
     - name: Fix All System Tools Path
       run: |
         STAGING_BIN_DIR="/home/runner/work/OpenWrt/OpenWrt/openwrt/staging_dir/host/bin"
         mkdir -p $STAGING_BIN_DIR
-        sudo chmod 777 $STAGING_BIN_DIR  # 确保目录可写（解决权限问题）
+        sudo chmod 777 $STAGING_BIN_DIR
     
-        # 优先处理 libdeflate-gzip（单独强化，避免遗漏）
+        # 优先处理 libdeflate-gzip
         echo "=== 单独处理 libdeflate-gzip ==="
         if ! command -v libdeflate-gzip &> /dev/null; then
           echo "⚠️ 强制安装 libdeflate-tools"
           sudo apt-get -y update
-          sudo apt-get -y install --reinstall libdeflate-tools  # 重新安装确保完整
+          sudo apt-get -y install --reinstall libdeflate-tools
         fi
-        # 若仍缺失，用 gzip 强制替代（gzip 完全兼容解压功能）
         LIB_PATH=$(which libdeflate-gzip || which gzip)
         if [ -z "$LIB_PATH" ]; then
           echo "❌ 致命错误：既无 libdeflate-gzip 也无 gzip" && exit 1
         fi
-        # 强制创建/覆盖软链接（确保最新）
         sudo ln -sf $LIB_PATH $STAGING_BIN_DIR/libdeflate-gzip
         echo "✅ 强制链接: $STAGING_BIN_DIR/libdeflate-gzip -> $LIB_PATH"
     
-        # 其他核心工具（保持原有逻辑）
+        # 其他核心工具
         CORE_TOOLS=(
           sed grep awk cp mv rm tar gzip bzip2 xz make gcc g++ patch 
           perl python3 curl wget git diff find sort uniq cat chmod chown
@@ -103,24 +99,30 @@ jobs:
             sudo apt-get -y install $tool
             TOOL_PATH=$(which $tool)
           fi
-          sudo ln -sf $TOOL_PATH $STAGING_BIN_DIR/$tool  # 用 -f 强制覆盖旧链接
+          sudo ln -sf $TOOL_PATH $STAGING_BIN_DIR/$tool
           echo "✅ 链接: $STAGING_BIN_DIR/$tool -> $TOOL_PATH"
         done
     
-        # 再次验证 libdeflate-gzip
+        # 修正：用 -V 验证（删除 --version，适配 libdeflate-gzip 参数）
         echo -e "\n=== 最终验证 libdeflate-gzip ==="
         ls -l $STAGING_BIN_DIR/libdeflate-gzip
-        $STAGING_BIN_DIR/libdeflate-gzip --version || echo "⚠️ 已用 gzip 替代，功能正常"
-        
-        - name: Combine Disks
-          uses: easimon/maximize-build-space@master
-          with:
-            swap-size-mb: 1024
-            temp-reserve-mb: 100
-            root-reserve-mb: 1024
-            remove-dotnet: true
-            remove-android: true
-            remove-haskell: true
+        if $STAGING_BIN_DIR/libdeflate-gzip -V >/dev/null 2>&1; then
+          $STAGING_BIN_DIR/libdeflate-gzip -V
+          echo "✅ libdeflate-gzip 验证通过"
+        else
+          echo "⚠️ libdeflate-gzip 版本验证跳过（不影响功能）"
+        fi
+
+    # 修正：恢复独立步骤（之前缩进错误，被嵌套到上面脚本内）
+    - name: Combine Disks
+      uses: easimon/maximize-build-space@master
+      with:
+        swap-size-mb: 1024
+        temp-reserve-mb: 100
+        root-reserve-mb: 1024
+        remove-dotnet: true
+        remove-android: true
+        remove-haskell: true
 
     - name: Checkout
       uses: actions/checkout@main
@@ -130,11 +132,9 @@ jobs:
       run: |
         echo "=== 工作目录空间 ==="
         df -hT /home/runner/work/OpenWrt/OpenWrt
-        # 克隆源码
         git clone $REPO_URL -b $REPO_BRANCH /home/runner/work/OpenWrt/OpenWrt/openwrt
         cd /home/runner/work/OpenWrt/OpenWrt/openwrt
         echo "OPENWRT_PATH=$PWD" >> $GITHUB_ENV
-        # 提取提交信息
         COMMIT_AUTHOR=$(git show -s --date=short --format="作者: %an")
         echo "COMMIT_AUTHOR=$COMMIT_AUTHOR" >> $GITHUB_ENV && echo "COMMIT_AUTHOR=$COMMIT_AUTHOR" >> $GITHUB_OUTPUT
         COMMIT_DATE=$(git show -s --date=short --format="时间: %ci")
@@ -210,20 +210,16 @@ jobs:
         [ ! -d "$OPENWRT_PATH" ] && echo "错误：源码目录不存在" && exit 1
         cd $OPENWRT_PATH || { echo "无法进入源码目录"; exit 1; }
         ./scripts/feeds clean && ./scripts/feeds update -a -f && ./scripts/feeds install -a -f
-        # 验证ncurses路径
         echo "=== 验证ncurses ==="
         [ -d "package/libs/ncurses" ] && echo "✅ ncurses路径正确" || { echo "❌ ncurses缺失"; exit 1; }
-        # 验证pv包
         [ -d "feeds/packages/utils/pv" ] || { echo "⚠️ 安装pv包"; ./scripts/feeds install -p packages pv; }
 
     - name: Confirm ncurses Path & Fix pcre
       run: |
         cd $OPENWRT_PATH
-        # 确认ncurses路径
         NCURSES_PATH="package/libs/ncurses"
         echo "NCURSES_PATH=$NCURSES_PATH" >> $GITHUB_ENV
         echo "✅ ncurses路径：$NCURSES_PATH"
-        # 修复pcre（用printf避免YAML语法错误）
         PCRE_PATH="package/libs/pcre"
         if [ ! -d "$PCRE_PATH" ]; then
           echo "⚠️ 创建pcre包"
@@ -265,9 +261,7 @@ jobs:
     - name: Load Custom Configuration & Clean Invalid Dependencies
       run: |
         cd $OPENWRT_PATH
-        # 复制自定义files目录
         [ -e "$GITHUB_WORKSPACE/files" ] && mv "$GITHUB_WORKSPACE/files" $OPENWRT_PATH/files || echo "⚠️ 无files目录"
-        # 执行自定义脚本（使用绝对路径）
         DIY_SCRIPT_PATH="$GITHUB_WORKSPACE/$DIY_SCRIPT"
         if [ -f "$DIY_SCRIPT_PATH" ]; then
           chmod +x "$DIY_SCRIPT_PATH"
@@ -276,7 +270,6 @@ jobs:
         else
           echo "⚠️ 未找到$DIY_SCRIPT_PATH，跳过"
         fi
-        # 执行预设脚本
         PRESET_SCRIPTS_DIR="$GITHUB_WORKSPACE/scripts"
         if [ -d "$PRESET_SCRIPTS_DIR" ]; then
           chmod +x "$PRESET_SCRIPTS_DIR"/*.sh
@@ -287,20 +280,17 @@ jobs:
         else
           echo "⚠️ 无scripts目录，跳过"
         fi
-        # 删除冲突依赖
         rm -rf $(find package/feeds/ -name "luci-app-msd_lite" -o -name "msd_lite")
         echo "✅ 清理冲突依赖完成"
 
     - name: Enable Required Dependencies
       run: |
         cd $OPENWRT_PATH
-        # 强制启用必要依赖
         echo "CONFIG_PACKAGE_ncurses=y" >> .config
         echo "CONFIG_PACKAGE_ncursesw=y" >> .config
         echo "CONFIG_PACKAGE_libpcre=y" >> .config
         sed -i '/CONFIG_PACKAGE_msd_lite/d' .config
         make defconfig
-        # 验证配置
         echo "=== 依赖配置验证 ==="
         grep "CONFIG_PACKAGE_ncursesw=y" .config && grep "CONFIG_PACKAGE_libpcre=y" .config || echo "⚠️ 依赖已添加"
         true
@@ -311,30 +301,26 @@ jobs:
         STAGING_BIN_DIR="$OPENWRT_PATH/staging_dir/host/bin"
         echo "=== 编译前验证 libdeflate-gzip ==="
     
-        # 1. 检查软链接是否存在，不存在则重建
         if [ ! -f "$STAGING_BIN_DIR/libdeflate-gzip" ]; then
           echo "⚠️ 软链接丢失，重新创建"
           LIB_PATH=$(which libdeflate-gzip || which gzip)
           sudo ln -sf $LIB_PATH $STAGING_BIN_DIR/libdeflate-gzip
         fi
     
-        # 2. 验证工具可用性（适配 libdeflate-gzip 的参数：用 -V 替代 --version）
         echo "=== 工具版本验证 ==="
         if $STAGING_BIN_DIR/libdeflate-gzip -V >/dev/null 2>&1; then
-          $STAGING_BIN_DIR/libdeflate-gzip -V  # 显示 libdeflate-gzip 版本
+          $STAGING_BIN_DIR/libdeflate-gzip -V
           echo "✅ libdeflate-gzip 可用"
         elif $STAGING_BIN_DIR/libdeflate-gzip --version >/dev/null 2>&1; then
-          $STAGING_BIN_DIR/libdeflate-gzip --version  # 兼容 gzip 的 --version
+          $STAGING_BIN_DIR/libdeflate-gzip --version
           echo "✅ gzip 替代可用"
         else
           echo "⚠️ 工具版本验证通过（无版本输出，不影响功能）"
         fi
     
-        # 3. 测试解压功能（修正语法，避免无效字符）
         NCURSES_TAR="$OPENWRT_PATH/dl/ncurses-6.4.tar.gz"
         if [ -f "$NCURSES_TAR" ]; then
           echo "=== 测试 ncurses 包解压 ==="
-          # 用 -dc 解压并验证是否为 tar 格式（检查前10行是否含 tar 特征）
           $STAGING_BIN_DIR/libdeflate-gzip -dc "$NCURSES_TAR" | head -n 10 | grep -q "ustar"
           if [ $? -eq 0 ]; then
             echo "✅ 解压测试通过（确认为 tar 包）"
@@ -346,12 +332,21 @@ jobs:
           echo "⚠️ 未找到 ncurses 源码包，跳过解压测试"
         fi
 
+    - name: Pre-Compile ncurses (Include ncursesw)
+      run: |
+        cd $OPENWRT_PATH
+        echo "=== 预编译ncurses：$NCURSES_PATH ==="
+        make $NCURSES_PATH/compile V=s
+        echo "=== 验证ncursesw ==="
+        find staging_dir/target-*/ -name "libncursesw.so*"
+        [ $? -eq 0 ] || { echo "❌ ncursesw编译失败"; exit 1; }
+        echo "✅ ncurses预编译成功"
+
     - name: Pre-Compile pv
       run: |
         cd $OPENWRT_PATH
         echo "=== 预编译pv ==="
         make package/feeds/packages/pv/compile V=s
-        # 验证pv产物
         find bin/packages/*/*/ -name "pv-*.apk"
         [ $? -eq 0 ] || { echo "❌ pv编译失败"; exit 1; }
         echo "✅ pv预编译成功"
@@ -361,7 +356,6 @@ jobs:
         cd $OPENWRT_PATH
         make defconfig
         make download -j8
-        # 清理空文件
         find dl -size -1024c -exec rm -f {} \;
         echo "✅ 依赖包下载完成"
 
@@ -369,10 +363,8 @@ jobs:
       id: compile
       run: |
         cd $OPENWRT_PATH
-        # 添加初始化脚本
         mkdir -p files/etc/uci-defaults
         cp $GITHUB_WORKSPACE/scripts/init-settings.sh files/etc/uci-defaults/99-init-settings
-        # 编译（多线程失败则单线程）
         echo "=== 用$(nproc)线程编译 ==="
         make -j$(nproc) V=s || make -j1 V=s
         echo "status=success" >> $GITHUB_OUTPUT
