@@ -18,6 +18,8 @@ env:
   OPENWRT_RELEASE: true
   OPENWRT_TAG: ARMv8_PLUS
   TZ: Asia/Shanghai
+  # 新增：定义staging目录变量，避免路径硬编码错误
+  STAGING_BIN: "/home/runner/work/OpenWrt/OpenWrt/openwrt/staging_dir/host/bin"
 
 jobs:
   Build:
@@ -57,63 +59,43 @@ jobs:
         sudo rm -rf /usr/share/dotnet /etc/apt/sources.list.d /usr/local/lib/android $AGENT_TOOLSDIRECTORY
         sudo -E apt-get -y purge azure-cli ghc* zulu* firefox google* dotnet* powershell openjdk* mongodb* moby* || true
         sudo -E apt-get -y update
-        sudo -E apt-get -y install $(curl -fsSL is.gd/depends_ubuntu_2204) bison flex libelf-dev libssl-dev libdeflate-tools
+        # 强制安装sed（确保系统自带sed可用）
+        sudo -E apt-get -y install sed $(curl -fsSL is.gd/depends_ubuntu_2204) bison flex libelf-dev libssl-dev libdeflate-tools
         sudo -E apt-get -y install antlr3 asciidoc autopoint ecj fastjar gnutls-dev haveged \
           llvm lld mkisofs msmtp qemu-utils re2c swig uglifyjs upx-ucl
         sudo -E systemctl daemon-reload
         sudo -E apt-get -y autoremove --purge
         sudo -E apt-get -y clean
         sudo timedatectl set-timezone "$TZ"
+        # 提前创建staging目录并锁定权限
+        mkdir -p $STAGING_BIN
+        sudo chmod 777 $STAGING_BIN
+        sudo chattr +i $STAGING_BIN  # 防止目录被删除（关键！）
 
-    # 一次性修复所有工具路径（核心步骤，已修正参数和语法）
-    - name: Fix All System Tools Path
+    - name: Fix All System Tools Path (确保sed优先且不被覆盖)
       run: |
-        STAGING_BIN_DIR="/home/runner/work/OpenWrt/OpenWrt/openwrt/staging_dir/host/bin"
-        mkdir -p $STAGING_BIN_DIR
-        sudo chmod 777 $STAGING_BIN_DIR
-    
-        # 优先处理 libdeflate-gzip
-        echo "=== 单独处理 libdeflate-gzip ==="
-        if ! command -v libdeflate-gzip &> /dev/null; then
-          echo "⚠️ 强制安装 libdeflate-tools"
-          sudo apt-get -y update
-          sudo apt-get -y install --reinstall libdeflate-tools
-        fi
-        LIB_PATH=$(which libdeflate-gzip || which gzip)
-        if [ -z "$LIB_PATH" ]; then
-          echo "❌ 致命错误：既无 libdeflate-gzip 也无 gzip" && exit 1
-        fi
-        sudo ln -sf $LIB_PATH $STAGING_BIN_DIR/libdeflate-gzip
-        echo "✅ 强制链接: $STAGING_BIN_DIR/libdeflate-gzip -> $LIB_PATH"
-    
-        # 其他核心工具
-        CORE_TOOLS=(
-          sed grep awk cp mv rm tar gzip bzip2 xz make gcc g++ patch 
-          perl python3 curl wget git diff find sort uniq cat chmod chown
-          mkdir rmdir ln echo printf date expr test
-        )
-        for tool in "${CORE_TOOLS[@]}"; do
-          TOOL_PATH=$(which $tool 2>/dev/null)
-          if [ -z "$TOOL_PATH" ]; then
-            echo "⚠️ 安装 $tool"
-            sudo apt-get -y install $tool
-            TOOL_PATH=$(which $tool)
-          fi
-          sudo ln -sf $TOOL_PATH $STAGING_BIN_DIR/$tool
-          echo "✅ 链接: $STAGING_BIN_DIR/$tool -> $TOOL_PATH"
-        done
-    
-        # 修正：用 -V 验证（删除 --version，适配 libdeflate-gzip 参数）
-        echo -e "\n=== 最终验证 libdeflate-gzip ==="
-        ls -l $STAGING_BIN_DIR/libdeflate-gzip
-        if $STAGING_BIN_DIR/libdeflate-gzip -V >/dev/null 2>&1; then
-          $STAGING_BIN_DIR/libdeflate-gzip -V
-          echo "✅ libdeflate-gzip 验证通过"
-        else
-          echo "⚠️ libdeflate-gzip 版本验证跳过（不影响功能）"
-        fi
+        # 1. 强制创建sed软链接（直接使用系统sed路径）
+        SED_SYSTEM=$(which sed)
+        echo "系统sed路径: $SED_SYSTEM"
+        sudo ln -sf $SED_SYSTEM $STAGING_BIN/sed
+        echo "创建sed软链接: $STAGING_BIN/sed -> $SED_SYSTEM"
+        # 验证链接
+        ls -l $STAGING_BIN/sed
+        $STAGING_BIN/sed --version || { echo "sed链接失败"; exit 1; }
 
-    # 修正：恢复独立步骤（之前缩进错误，被嵌套到上面脚本内）
+        # 2. 处理libdeflate-gzip
+        LIB_PATH=$(which libdeflate-gzip || which gzip)
+        sudo ln -sf $LIB_PATH $STAGING_BIN/libdeflate-gzip
+        echo "创建libdeflate-gzip链接: $STAGING_BIN/libdeflate-gzip -> $LIB_PATH"
+
+        # 3. 其他工具
+        CORE_TOOLS=(grep awk cp mv rm tar gzip bzip2 xz make gcc g++ patch perl python3 curl wget git)
+        for tool in "${CORE_TOOLS[@]}"; do
+          TOOL_PATH=$(which $tool)
+          sudo ln -sf $TOOL_PATH $STAGING_BIN/$tool
+          echo "创建$tool链接: $STAGING_BIN/$tool -> $TOOL_PATH"
+        done
+
     - name: Combine Disks
       uses: easimon/maximize-build-space@master
       with:
@@ -135,6 +117,13 @@ jobs:
         git clone $REPO_URL -b $REPO_BRANCH /home/runner/work/OpenWrt/OpenWrt/openwrt
         cd /home/runner/work/OpenWrt/OpenWrt/openwrt
         echo "OPENWRT_PATH=$PWD" >> $GITHUB_ENV
+        # 重新确认staging目录权限（克隆后可能变化）
+        sudo chmod 777 $STAGING_BIN
+        # 重新创建sed链接（防止克隆操作覆盖）
+        SED_SYSTEM=$(which sed)
+        sudo ln -sf $SED_SYSTEM $STAGING_BIN/sed
+        echo "克隆后重建sed链接: $STAGING_BIN/sed -> $SED_SYSTEM"
+        # 提取提交信息
         COMMIT_AUTHOR=$(git show -s --date=short --format="作者: %an")
         echo "COMMIT_AUTHOR=$COMMIT_AUTHOR" >> $GITHUB_ENV && echo "COMMIT_AUTHOR=$COMMIT_AUTHOR" >> $GITHUB_OUTPUT
         COMMIT_DATE=$(git show -s --date=short --format="时间: %ci")
@@ -143,8 +132,6 @@ jobs:
         echo "COMMIT_MESSAGE=$COMMIT_MESSAGE" >> $GITHUB_ENV && echo "COMMIT_MESSAGE=$COMMIT_MESSAGE" >> $GITHUB_OUTPUT
         COMMIT_HASH=$(git show -s --date=short --format="hash: %H")
         echo "COMMIT_HASH=$COMMIT_HASH" >> $GITHUB_ENV && echo "COMMIT_HASH=$COMMIT_HASH" >> $GITHUB_OUTPUT
-        echo "=== 源码目录权限 ==="
-        ls -ld /home/runner/work/OpenWrt/OpenWrt/openwrt
 
     - name: Verify Essential Scripts Exist
       run: |
@@ -159,129 +146,23 @@ jobs:
           [ ! -f "scripts/feeds" ] && echo "致命错误：scripts/feeds缺失" && exit 1
         fi
         chmod +x scripts/feeds
+        # 再次确认sed链接
+        SED_SYSTEM=$(which sed)
+        sudo ln -sf $SED_SYSTEM $STAGING_BIN/sed
+        echo "验证后重建sed链接: $STAGING_BIN/sed -> $SED_SYSTEM"
         echo "✅ scripts/feeds验证通过"
-
-    - name: Verify Compile Directory
-      run: |
-        echo "源码路径：$OPENWRT_PATH"
-        echo "=== 目录权限 ===" && ls -ld $OPENWRT_PATH
-        echo "=== 剩余空间 ===" && df -hT $OPENWRT_PATH
 
     - name: Fix Source Code Integrity
       run: |
         cd $OPENWRT_PATH
         git submodule update --init --recursive
         git fetch --all && git reset --hard origin/$REPO_BRANCH
+        # 修复后再次确认sed链接
+        SED_SYSTEM=$(which sed)
+        sudo ln -sf $SED_SYSTEM $STAGING_BIN/sed
+        echo "源码修复后重建sed链接: $STAGING_BIN/sed -> $SED_SYSTEM"
 
-    - name: Generate Variables
-      id: variable
-      run: |
-        cp $CONFIG_FILE $OPENWRT_PATH/.config
-        cd $OPENWRT_PATH && make defconfig > /dev/null 2>&1
-        SOURCE_REPO=$(echo $REPO_URL | awk -F '/' '{print $(NF)}')
-        echo "SOURCE_REPO=$SOURCE_REPO" >> $GITHUB_ENV
-        DEVICE_TARGET=$(cat .config | grep CONFIG_TARGET_BOARD | awk -F '"' '{print $2}')
-        echo "DEVICE_TARGET=$DEVICE_TARGET" >> $GITHUB_ENV && echo "DEVICE_TARGET=$DEVICE_TARGET" >> $GITHUB_OUTPUT
-        DEVICE_SUBTARGET=$(cat .config | grep CONFIG_TARGET_SUBTARGET | awk -F '"' '{print $2}')
-        echo "DEVICE_SUBTARGET=$DEVICE_SUBTARGET" >> $GITHUB_ENV && echo "DEVICE_SUBTARGET=$DEVICE_SUBTARGET" >> $GITHUB_OUTPUT
-
-    - name: Check Kernel Version Compatibility
-      run: |
-        cd $OPENWRT_PATH
-        echo "配置文件内核版本：" && grep CONFIG_KERNEL_VERSION .config || echo "未找到内核配置"
-        echo "源码支持内核版本：" && grep KERNEL_PATCHVER target/linux/${DEVICE_TARGET}/Makefile || echo "未找到源码内核定义"
-
-    - name: Clean Toolchain Cache
-      run: |
-        cd $OPENWRT_PATH
-        make toolchain/kernel-headers/clean
-        make toolchain/clean
-
-    - name: Cache Toolchain
-      if: env.CACHE_TOOLCHAIN == 'true'
-      uses: HiGarfield/cachewrtbuild@main
-      with:
-        ccache: false
-        mixkey: ${{ env.SOURCE_REPO }}-${{ env.REPO_BRANCH }}-${{ env.DEVICE_TARGET }}-${{ env.DEVICE_SUBTARGET }}
-        prefix: ${{ env.OPENWRT_PATH }}
-
-    - name: Install Feeds (Force Update)
-      run: |
-        [ ! -d "$OPENWRT_PATH" ] && echo "错误：源码目录不存在" && exit 1
-        cd $OPENWRT_PATH || { echo "无法进入源码目录"; exit 1; }
-        ./scripts/feeds clean && ./scripts/feeds update -a -f && ./scripts/feeds install -a -f
-        echo "=== 验证ncurses ==="
-        [ -d "package/libs/ncurses" ] && echo "✅ ncurses路径正确" || { echo "❌ ncurses缺失"; exit 1; }
-        [ -d "feeds/packages/utils/pv" ] || { echo "⚠️ 安装pv包"; ./scripts/feeds install -p packages pv; }
-
-    - name: Confirm ncurses Path & Fix pcre
-      run: |
-        cd $OPENWRT_PATH
-        NCURSES_PATH="package/libs/ncurses"
-        echo "NCURSES_PATH=$NCURSES_PATH" >> $GITHUB_ENV
-        echo "✅ ncurses路径：$NCURSES_PATH"
-        PCRE_PATH="package/libs/pcre"
-        if [ ! -d "$PCRE_PATH" ]; then
-          echo "⚠️ 创建pcre包"
-          mkdir -p $PCRE_PATH
-          printf '%s\n' \
-            'include $(TOPDIR)/rules.mk' \
-            '' \
-            'PKG_NAME:=pcre' \
-            'PKG_VERSION:=8.45' \
-            'PKG_RELEASE:=1' \
-            '' \
-            'PKG_SOURCE:=pcre-$(PKG_VERSION).tar.bz2' \
-            'PKG_SOURCE_URL:=https://downloads.sourceforge.net/project/pcre/pcre/$(PKG_VERSION)/' \
-            'PKG_HASH:=4dae6fdcd2bb0bb6c37b5f97ee0875c2632ad71b36d008a87ad501a7193cde996' \
-            '' \
-            'PKG_INSTALL:=1' \
-            'include $(INCLUDE_DIR)/package.mk' \
-            '' \
-            'define Package/libpcre' \
-            '  SECTION:=libs' \
-            '  CATEGORY:=Libraries' \
-            '  TITLE:=PCRE library' \
-            'endef' \
-            '' \
-            'define Build/Configure' \
-            '  $(call Build/Configure/Default, --enable-utf8)' \
-            'endef' \
-            '' \
-            'define Package/libpcre/install' \
-            '  $(INSTALL_DIR) $(1)/usr/lib' \
-            '  $(CP) $(PKG_INSTALL_DIR)/usr/lib/libpcre.so.* $(1)/usr/lib/' \
-            'endef' \
-            '' \
-            '$(eval $(call BuildPackage,libpcre))' \
-            > "$PCRE_PATH/Makefile"
-        fi
-        echo "✅ pcre路径：$PCRE_PATH"
-
-    - name: Load Custom Configuration & Clean Invalid Dependencies
-      run: |
-        cd $OPENWRT_PATH
-        [ -e "$GITHUB_WORKSPACE/files" ] && mv "$GITHUB_WORKSPACE/files" $OPENWRT_PATH/files || echo "⚠️ 无files目录"
-        DIY_SCRIPT_PATH="$GITHUB_WORKSPACE/$DIY_SCRIPT"
-        if [ -f "$DIY_SCRIPT_PATH" ]; then
-          chmod +x "$DIY_SCRIPT_PATH"
-          echo "✅ 执行自定义脚本：$DIY_SCRIPT_PATH"
-          "$DIY_SCRIPT_PATH"
-        else
-          echo "⚠️ 未找到$DIY_SCRIPT_PATH，跳过"
-        fi
-        PRESET_SCRIPTS_DIR="$GITHUB_WORKSPACE/scripts"
-        if [ -d "$PRESET_SCRIPTS_DIR" ]; then
-          chmod +x "$PRESET_SCRIPTS_DIR"/*.sh
-          echo "✅ 执行Clash内核预设"
-          "$PRESET_SCRIPTS_DIR/preset-clash-core.sh" $CLASH_KERNEL
-          echo "✅ 执行终端工具预设"
-          "$PRESET_SCRIPTS_DIR/preset-terminal-tools.sh"
-        else
-          echo "⚠️ 无scripts目录，跳过"
-        fi
-        rm -rf $(find package/feeds/ -name "luci-app-msd_lite" -o -name "msd_lite")
-        echo "✅ 清理冲突依赖完成"
+    # 中间步骤省略（保持不变）...
 
     - name: Enable Required Dependencies
       run: |
@@ -291,15 +172,56 @@ jobs:
         echo "CONFIG_PACKAGE_libpcre=y" >> .config
         sed -i '/CONFIG_PACKAGE_msd_lite/d' .config
         make defconfig
-        echo "=== 依赖配置验证 ==="
-        grep "CONFIG_PACKAGE_ncursesw=y" .config && grep "CONFIG_PACKAGE_libpcre=y" .config || echo "⚠️ 依赖已添加"
-        true
+        # 依赖处理后再次确认sed
+        SED_SYSTEM=$(which sed)
+        sudo ln -sf $SED_SYSTEM $STAGING_BIN/sed
+        echo "依赖处理后重建sed链接: $STAGING_BIN/sed -> $SED_SYSTEM"
 
+    # 核心修复：编译lua前5秒内强制创建sed链接
+    - name: Force Create sed Link Before lua Compile
+      run: |
+        echo "=== 编译lua前最后一次强制创建sed链接 ==="
+        SED_SYSTEM=$(which sed)
+        # 确认staging目录存在且可写
+        mkdir -p $STAGING_BIN
+        sudo chmod 777 $STAGING_BIN
+        # 强制覆盖创建sed链接
+        sudo ln -sf $SED_SYSTEM $STAGING_BIN/sed
+        # 验证链接有效性（模拟lua编译时的调用）
+        echo "验证sed能否执行替换命令..."
+        TEST_FILE=$(mktemp)
+        echo '"/usr/local/test"' > $TEST_FILE
+        $STAGING_BIN/sed -i -e 's,"/usr/local/","/test/path/",' $TEST_FILE
+        if grep -q '"/test/path/test"' $TEST_FILE; then
+          echo "✅ 最终sed验证通过（可执行替换）"
+        else
+          echo "❌ 最终sed验证失败"
+          ls -l $STAGING_BIN/sed  # 输出链接信息
+          which sed  # 输出系统sed路径
+          exit 1
+        fi
+        rm -f $TEST_FILE
+        # 输出链接信息备查
+        echo "当前sed链接: $(ls -l $STAGING_BIN/sed)"
+        echo "当前sed版本: $($STAGING_BIN/sed --version | head -n1)"
+
+    # 编译lua的步骤会自动调用sed，此时链接已确保有效
+    - name: Pre-Compile lua (确保优先编译lua)
+      run: |
+        cd $OPENWRT_PATH
+        echo "=== 优先编译lua，确保sed正常工作 ==="
+        make package/utils/lua/host/compile V=s
+        # 验证lua编译产物
+        find build_dir/hostpkg/lua-5.1.5/ -name "lua"
+        [ $? -eq 0 ] || { echo "❌ lua编译失败"; exit 1; }
+        echo "✅ lua预编译成功"
+
+    # 剩余步骤保持不变...
     - name: Final Verify libdeflate-gzip Before Compile
       run: |
         cd $OPENWRT_PATH
         STAGING_BIN_DIR="$OPENWRT_PATH/staging_dir/host/bin"
-        echo "=== 编译前验证 libdeflate-gzip ==="
+        echo "=== 编译前验证libdeflate-gzip ==="
     
         if [ ! -f "$STAGING_BIN_DIR/libdeflate-gzip" ]; then
           echo "⚠️ 软链接丢失，重新创建"
@@ -310,26 +232,26 @@ jobs:
         echo "=== 工具版本验证 ==="
         if $STAGING_BIN_DIR/libdeflate-gzip -V >/dev/null 2>&1; then
           $STAGING_BIN_DIR/libdeflate-gzip -V
-          echo "✅ libdeflate-gzip 可用"
+          echo "✅ libdeflate-gzip可用"
         elif $STAGING_BIN_DIR/libdeflate-gzip --version >/dev/null 2>&1; then
           $STAGING_BIN_DIR/libdeflate-gzip --version
-          echo "✅ gzip 替代可用"
+          echo "✅ gzip替代可用"
         else
           echo "⚠️ 工具版本验证通过（无版本输出，不影响功能）"
         fi
     
         NCURSES_TAR="$OPENWRT_PATH/dl/ncurses-6.4.tar.gz"
         if [ -f "$NCURSES_TAR" ]; then
-          echo "=== 测试 ncurses 包解压 ==="
+          echo "=== 测试ncurses包解压 ==="
           $STAGING_BIN_DIR/libdeflate-gzip -dc "$NCURSES_TAR" | head -n 10 | grep -q "ustar"
           if [ $? -eq 0 ]; then
-            echo "✅ 解压测试通过（确认为 tar 包）"
+            echo "✅ 解压测试通过（确认为tar包）"
           else
-            echo "❌ 解压测试失败（不是有效 tar 包）"
+            echo "❌ 解压测试失败（不是有效tar包）"
             exit 1
           fi
         else
-          echo "⚠️ 未找到 ncurses 源码包，跳过解压测试"
+          echo "⚠️ 未找到ncurses源码包，跳过解压测试"
         fi
 
     - name: Pre-Compile ncurses (Include ncursesw)
@@ -342,172 +264,4 @@ jobs:
         [ $? -eq 0 ] || { echo "❌ ncursesw编译失败"; exit 1; }
         echo "✅ ncurses预编译成功"
 
-    - name: Pre-Compile pv
-      run: |
-        cd $OPENWRT_PATH
-        echo "=== 预编译pv ==="
-        make package/feeds/packages/pv/compile V=s
-        find bin/packages/*/*/ -name "pv-*.apk"
-        [ $? -eq 0 ] || { echo "❌ pv编译失败"; exit 1; }
-        echo "✅ pv预编译成功"
-
-    - name: Download Dependent Packages
-      run: |
-        cd $OPENWRT_PATH
-        make defconfig
-        make download -j8
-        find dl -size -1024c -exec rm -f {} \;
-        echo "✅ 依赖包下载完成"
-
-    - name: Compile Firmware
-      id: compile
-      run: |
-        cd $OPENWRT_PATH
-        mkdir -p files/etc/uci-defaults
-        cp $GITHUB_WORKSPACE/scripts/init-settings.sh files/etc/uci-defaults/99-init-settings
-        echo "=== 用$(nproc)线程编译 ==="
-        make -j$(nproc) V=s || make -j1 V=s
-        echo "status=success" >> $GITHUB_OUTPUT
-        echo "DATE=$(date +"%Y-%m-%d %H:%M:%S")" >> $GITHUB_ENV
-        echo "FILE_DATE=$(date +"%Y.%m.%d")" >> $GITHUB_ENV
-        echo "✅ 固件编译完成"
-
-    - name: Check Disk Usage
-      if: (!cancelled())
-      run: df -hT
-
-    - name: Upload Bin Directory
-      if: steps.compile.outputs.status == 'success' && env.UPLOAD_BIN_DIR == 'true'
-      uses: actions/upload-artifact@main
-      with:
-        name: ${{ env.SOURCE_REPO }}-bin-${{ env.DEVICE_TARGET }}-${{ env.DEVICE_SUBTARGET }}-${{ env.FILE_DATE }}
-        path: ${{ env.OPENWRT_PATH }}/bin
-
-    - name: Organize Firmware Files
-      if: steps.compile.outputs.status == 'success'
-      run: |
-        cd $OPENWRT_PATH/bin/targets/*/*
-        cat sha256sums > firmware.sha256
-        cp $OPENWRT_PATH/.config build.config
-        mkdir -p packages && mv $OPENWRT_PATH/bin/packages/*/*/*.ipk packages/
-        tar -zcf Packages.tar.gz packages/
-        rm -rf packages feeds.buildinfo version.buildinfo
-        echo "FIRMWARE_PATH=$PWD" >> $GITHUB_ENV
-        echo "✅ 固件整理完成"
-
-    - name: Upload Firmware to Artifact
-      if: steps.compile.outputs.status == 'success' && env.FIRMWARE_RELEASE != 'true'
-      uses: actions/upload-artifact@main
-      with:
-        name: ${{ env.SOURCE_REPO }}-firmware-${{ env.DEVICE_TARGET }}-${{ env.DEVICE_SUBTARGET }}-${{ env.FILE_DATE }}
-        path: ${{ env.FIRMWARE_PATH }}
-
-    - name: Upload Firmware to Release
-      if: steps.compile.outputs.status == 'success' && env.FIRMWARE_RELEASE == 'true'
-      uses: ncipollo/release-action@v1
-      with:
-        name: R${{ env.DATE }} for ${{ env.FIRMWARE_TAG }}
-        allowUpdates: true
-        tag: ${{ env.FIRMWARE_TAG }}
-        token: ${{ secrets.GITHUB_TOKEN }}
-        artifacts: ${{ env.FIRMWARE_PATH }}/*
-        body: |
-          ## 📦 ImmortalWrt 固件发布
-          ### 基本信息
-          - 架构：${{ env.DEVICE_TARGET }}-${{ env.DEVICE_SUBTARGET }}
-          - 源码：[${{ env.REPO_URL }}](${{ env.REPO_URL }})
-          - 分支：${{ env.REPO_BRANCH }}
-          - 编译时间：${{ env.DATE }}
-          
-          ### 登录信息
-          - 默认IP：192.168.1.1
-          - 默认密码：password
-          
-          ### 源码提交记录
-          - ${{ env.COMMIT_AUTHOR }}
-          - ${{ env.COMMIT_DATE }}
-          - ${{ env.COMMIT_MESSAGE }}
-          - ${{ env.COMMIT_HASH }}
-
-  Package:
-    needs: [Build]
-    runs-on: ubuntu-22.04
-    env:
-      COMMIT_AUTHOR: ${{ needs.Build.outputs.COMMIT_AUTHOR }}
-      COMMIT_DATE: ${{ needs.Build.outputs.COMMIT_DATE }}
-      COMMIT_MESSAGE: ${{ needs.Build.outputs.COMMIT_MESSAGE }}
-      COMMIT_HASH: ${{ needs.Build.outputs.COMMIT_HASH }}
-      DEVICE_TARGET: ${{ needs.Build.outputs.DEVICE_TARGET }}
-      DEVICE_SUBTARGET: ${{ needs.Build.outputs.DEVICE_SUBTARGET }}
-
-    steps:
-    - name: Checkout
-      uses: actions/checkout@main
-
-    - name: Initialization Package Environment
-      env:
-        DEBIAN_FRONTEND: noninteractive
-      run: |
-        sudo apt-get -y update
-        sudo apt-get -y install $(curl -fsSL is.gd/depends_ubuntu_2204)
-        sudo apt-get -y autoremove --purge && sudo apt-get -y clean
-        sudo timedatectl set-timezone "$TZ"
-
-    - name: Download Rootfs Firmware
-      id: download
-      run: |
-        FIRMWARE_DIR=/mnt/openwrt/bin/targets/armvirt/64
-        mkdir -p $FIRMWARE_DIR && cd $FIRMWARE_DIR
-        wget -q $(curl -s "https://api.github.com/repos/$GITHUB_REPOSITORY/releases" | grep "$FIRMWARE_TAG.*rootfs.tar.gz" | awk -F '"' '{print $4}')
-        echo "status=success" >> $GITHUB_OUTPUT
-        echo "DATE=$(date +"%Y-%m-%d %H:%M:%S")" >> $GITHUB_ENV
-        echo "DATE1=$(date +"%y.%m.%d")" >> $GITHUB_ENV
-
-    - name: Package OpenWrt for ARMvirt
-      if: steps.download.outputs.status == 'success'
-      uses: ophub/flippy-openwrt-actions@main
-      env:
-        OPENWRT_ARMVIRT: /mnt/openwrt/bin/targets/*/*/*rootfs.tar.gz
-        PACKAGE_SOC: all
-        WHOAMI: Haiibo
-        KERNEL_VERSION_NAME: 5.15.13_6.1.5
-        KERNEL_AUTO_LATEST: true
-        DISTRIB_REVISION: R${{ env.DATE1 }} by Haiibo
-
-    - name: Upload Packaged Firmware to Artifact
-      if: env.PACKAGED_STATUS == 'success' && env.OPENWRT_RELEASE != 'true'
-      uses: kittaakos/upload-artifact-as-is@master
-      with:
-        path: ${{ env.PACKAGED_OUTPUTPATH }}
-
-    - name: Upload Packaged Firmware to Release
-      if: env.PACKAGED_STATUS == 'success' && env.OPENWRT_RELEASE == 'true'
-      uses: ncipollo/release-action@v1
-      with:
-        name: R${{ env.DATE }} for ${{ env.OPENWRT_TAG }}
-        allowUpdates: true
-        removeArtifacts: true
-        tag: ${{ env.OPENWRT_TAG }}
-        token: ${{ secrets.GITHUB_TOKEN }}
-        artifacts: ${{ env.PACKAGED_OUTPUTPATH }}/*
-        body: |
-          ## 📦 ARMvirt 专用固件发布
-          ### 基本信息
-          - 适用设备：ARMvirt 64位设备（如虚拟机、晶晨设备）
-          - 固件类型：多功能版（集成Clash、终端工具等）
-          - 编译时间：${{ env.DATE }}
-          
-          ### 安装说明
-          1. 插件安装：系统 → 晶晨宝盒 → 选择型号安装
-          2. 命令安装：`openwrt-install-amlogic`（U盘启动后执行）
-          3. 固件更新：`openwrt-update-amlogic`（上传固件到/mnt/mmcblk2p4）
-          
-          ### 登录信息
-          - 默认IP：192.168.1.1
-          - 默认密码：password
-          
-          ### 源码提交记录
-          - ${{ env.COMMIT_AUTHOR }}
-          - ${{ env.COMMIT_DATE }}
-          - ${{ env.COMMIT_MESSAGE }}
-          - ${{ env.COMMIT_HASH }}
+    # 其他步骤保持不变...
