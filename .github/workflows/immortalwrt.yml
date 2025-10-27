@@ -206,51 +206,53 @@ jobs:
         fi
 
     - name: Confirm ncurses Path in Source Code
-      run: |
-        cd $OPENWRT_PATH
-        # 直接指定源码内 ncurses 路径（用户确认的正确路径）
-        NCURSES_PATH="package/libs/ncurses"
-        echo "NCURSES_PATH=$NCURSES_PATH" >> $GITHUB_ENV
-        echo "已确认 ncurses 路径：$NCURSES_PATH"
-        # 确认 pcre（通常在源码 package/libs/pcre）
-        PCRE_PATH="package/libs/pcre"
-        if [ ! -d "$PCRE_PATH" ]; then
-          echo "⚠️  源码中未找到 pcre，创建本地包"
-          mkdir -p $PCRE_PATH
-          cat > $PCRE_PATH/Makefile << 'EOF'
-          include $(TOPDIR)/rules.mk
+  run: |
+    cd $OPENWRT_PATH
+    # 直接指定源码内 ncurses 路径（用户确认的正确路径）
+    NCURSES_PATH="package/libs/ncurses"
+    echo "NCURSES_PATH=$NCURSES_PATH" >> $GITHUB_ENV
+    echo "已确认 ncurses 路径：$NCURSES_PATH"
 
-          PKG_NAME:=pcre
-          PKG_VERSION:=8.45
-          PKG_RELEASE:=1
+    # 确认 pcre（通常在源码 package/libs/pcre）
+    PCRE_PATH="package/libs/pcre"
+    if [ ! -d "$PCRE_PATH" ]; then
+      echo "⚠️  源码中未找到 pcre，创建本地包"
+      mkdir -p $PCRE_PATH
+      # 修复 here-document 语法：确保 EOF 单独成行，无缩进和多余字符
+      cat > $PCRE_PATH/Makefile << 'EOF'
+include $(TOPDIR)/rules.mk
 
-          PKG_SOURCE:=pcre-$(PKG_VERSION).tar.bz2
-          PKG_SOURCE_URL:=https://downloads.sourceforge.net/project/pcre/pcre/$(PKG_VERSION)/
-          PKG_HASH:=4dae6fdcd2bb0bb6c37b5f97ee0875c2632ad71b36d008a87ad501a7193cde996
+PKG_NAME:=pcre
+PKG_VERSION:=8.45
+PKG_RELEASE:=1
 
-          PKG_INSTALL:=1
-          include $(INCLUDE_DIR)/package.mk
+PKG_SOURCE:=pcre-$(PKG_VERSION).tar.bz2
+PKG_SOURCE_URL:=https://downloads.sourceforge.net/project/pcre/pcre/$(PKG_VERSION)/
+PKG_HASH:=4dae6fdcd2bb0bb6c37b5f97ee0875c2632ad71b36d008a87ad501a7193cde996
 
-          define Package/libpcre
-            SECTION:=libs
-            CATEGORY:=Libraries
-            TITLE:=PCRE library
-          endef
+PKG_INSTALL:=1
+include $(INCLUDE_DIR)/package.mk
 
-          define Build/Configure
-            $(call Build/Configure/Default, --enable-utf8)
-          endef
+define Package/libpcre
+  SECTION:=libs
+  CATEGORY:=Libraries
+  TITLE:=PCRE library
+endef
 
-          define Package/libpcre/install
-            $(INSTALL_DIR) $(1)/usr/lib
-            $(CP) $(PKG_INSTALL_DIR)/usr/lib/libpcre.so.* $(1)/usr/lib/
-          endef
+define Build/Configure
+  $(call Build/Configure/Default, --enable-utf8)
+endef
 
-          $(eval $(call BuildPackage,libpcre))
-          EOF
-        fi
-        echo "已确认 pcre 路径：$PCRE_PATH"
+define Package/libpcre/install
+  $(INSTALL_DIR) $(1)/usr/lib
+  $(CP) $(PKG_INSTALL_DIR)/usr/lib/libpcre.so.* $(1)/usr/lib/
+endef
 
+$(eval $(call BuildPackage,libpcre))
+EOF
+    fi
+    echo "已确认 pcre 路径：$PCRE_PATH"
+    
     - name: Load Custom Configuration
       run: |
         [ -e files ] && mv files $OPENWRT_PATH/files
