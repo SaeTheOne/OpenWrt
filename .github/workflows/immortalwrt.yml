@@ -18,8 +18,7 @@ env:
   OPENWRT_RELEASE: true
   OPENWRT_TAG: ARMv8_PLUS
   TZ: Asia/Shanghai
-  # 新增：定义staging目录变量，避免路径硬编码错误
-  STAGING_BIN: "/home/runner/work/OpenWrt/OpenWrt/openwrt/staging_dir/host/bin"
+  STAGING_BIN: "/home/runner/work/OpenWrt/OpenWrt/openwrt/staging_dir/host/bin"  # 统一路径变量
 
 jobs:
   Build:
@@ -53,13 +52,14 @@ jobs:
       env:
         DEBIAN_FRONTEND: noninteractive
       run: |
+        # 清理环境
         if [ $(docker images -q | wc -l) -gt 0 ]; then
           docker rmi $(docker images -q)
         fi
         sudo rm -rf /usr/share/dotnet /etc/apt/sources.list.d /usr/local/lib/android $AGENT_TOOLSDIRECTORY
         sudo -E apt-get -y purge azure-cli ghc* zulu* firefox google* dotnet* powershell openjdk* mongodb* moby* || true
+        # 强制安装sed和依赖（确保系统sed可用）
         sudo -E apt-get -y update
-        # 强制安装sed（确保系统自带sed可用）
         sudo -E apt-get -y install sed $(curl -fsSL is.gd/depends_ubuntu_2204) bison flex libelf-dev libssl-dev libdeflate-tools
         sudo -E apt-get -y install antlr3 asciidoc autopoint ecj fastjar gnutls-dev haveged \
           llvm lld mkisofs msmtp qemu-utils re2c swig uglifyjs upx-ucl
@@ -67,21 +67,34 @@ jobs:
         sudo -E apt-get -y autoremove --purge
         sudo -E apt-get -y clean
         sudo timedatectl set-timezone "$TZ"
-        # 提前创建staging目录并锁定权限
-        mkdir -p $STAGING_BIN
-        sudo chmod 777 $STAGING_BIN
-        sudo chattr +i $STAGING_BIN  # 防止目录被删除（关键！）
 
-    - name: Fix All System Tools Path (确保sed优先且不被覆盖)
+        # 修复1：创建staging目录并设置宽松权限（不锁定目录）
+        mkdir -p $STAGING_BIN
+        sudo chown -R runner:runner /home/runner/work/OpenWrt/OpenWrt/openwrt  # 确保runner用户拥有所有权
+        sudo chmod -R 777 $STAGING_BIN  # 读写执行权限全开
+        echo "✅ staging目录权限设置完成：$(ls -ld $STAGING_BIN)"
+
+    - name: Fix All System Tools Path (解决sed权限问题)
       run: |
-        # 1. 强制创建sed软链接（直接使用系统sed路径）
+        # 1. 强制创建sed软链接（使用sudo确保权限）
         SED_SYSTEM=$(which sed)
         echo "系统sed路径: $SED_SYSTEM"
-        sudo ln -sf $SED_SYSTEM $STAGING_BIN/sed
+        # 先删除可能存在的无效链接
+        if [ -L "$STAGING_BIN/sed" ]; then
+          sudo rm -f $STAGING_BIN/sed
+        fi
+        # 重新创建链接（sudo确保权限）
+        sudo ln -s $SED_SYSTEM $STAGING_BIN/sed
         echo "创建sed软链接: $STAGING_BIN/sed -> $SED_SYSTEM"
-        # 验证链接
-        ls -l $STAGING_BIN/sed
-        $STAGING_BIN/sed --version || { echo "sed链接失败"; exit 1; }
+
+        # 验证sed链接是否有效
+        if [ ! -L "$STAGING_BIN/sed" ] || [ ! -e "$STAGING_BIN/sed" ]; then
+          echo "❌ sed软链接创建失败"
+          ls -l $STAGING_BIN  # 输出目录内容排查
+          exit 1
+        fi
+        echo "✅ sed软链接验证通过：$(ls -l $STAGING_BIN/sed)"
+        $STAGING_BIN/sed --version || { echo "❌ sed无法执行"; exit 1; }
 
         # 2. 处理libdeflate-gzip
         LIB_PATH=$(which libdeflate-gzip || which gzip)
@@ -114,15 +127,19 @@ jobs:
       run: |
         echo "=== 工作目录空间 ==="
         df -hT /home/runner/work/OpenWrt/OpenWrt
+        # 克隆源码
         git clone $REPO_URL -b $REPO_BRANCH /home/runner/work/OpenWrt/OpenWrt/openwrt
         cd /home/runner/work/OpenWrt/OpenWrt/openwrt
         echo "OPENWRT_PATH=$PWD" >> $GITHUB_ENV
-        # 重新确认staging目录权限（克隆后可能变化）
-        sudo chmod 777 $STAGING_BIN
-        # 重新创建sed链接（防止克隆操作覆盖）
+
+        # 修复2：克隆后重新确认权限（防止克隆操作修改权限）
+        sudo chown -R runner:runner /home/runner/work/OpenWrt/OpenWrt/openwrt
+        sudo chmod -R 777 $STAGING_BIN
+        # 重新创建sed链接（确保未被克隆操作覆盖）
         SED_SYSTEM=$(which sed)
         sudo ln -sf $SED_SYSTEM $STAGING_BIN/sed
-        echo "克隆后重建sed链接: $STAGING_BIN/sed -> $SED_SYSTEM"
+        echo "克隆后重建sed链接: $(ls -l $STAGING_BIN/sed)"
+
         # 提取提交信息
         COMMIT_AUTHOR=$(git show -s --date=short --format="作者: %an")
         echo "COMMIT_AUTHOR=$COMMIT_AUTHOR" >> $GITHUB_ENV && echo "COMMIT_AUTHOR=$COMMIT_AUTHOR" >> $GITHUB_OUTPUT
@@ -149,7 +166,7 @@ jobs:
         # 再次确认sed链接
         SED_SYSTEM=$(which sed)
         sudo ln -sf $SED_SYSTEM $STAGING_BIN/sed
-        echo "验证后重建sed链接: $STAGING_BIN/sed -> $SED_SYSTEM"
+        echo "验证后sed链接: $(ls -l $STAGING_BIN/sed)"
         echo "✅ scripts/feeds验证通过"
 
     - name: Fix Source Code Integrity
@@ -157,12 +174,133 @@ jobs:
         cd $OPENWRT_PATH
         git submodule update --init --recursive
         git fetch --all && git reset --hard origin/$REPO_BRANCH
-        # 修复后再次确认sed链接
+        # 修复3：源码修复后再次确认权限和链接
+        sudo chmod -R 777 $STAGING_BIN
         SED_SYSTEM=$(which sed)
         sudo ln -sf $SED_SYSTEM $STAGING_BIN/sed
-        echo "源码修复后重建sed链接: $STAGING_BIN/sed -> $SED_SYSTEM"
+        echo "源码修复后sed链接: $(ls -l $STAGING_BIN/sed)"
 
-    # 中间步骤省略（保持不变）...
+    - name: Generate Variables
+      id: variable
+      run: |
+        cp $CONFIG_FILE $OPENWRT_PATH/.config
+        cd $OPENWRT_PATH && make defconfig > /dev/null 2>&1
+        SOURCE_REPO=$(echo $REPO_URL | awk -F '/' '{print $(NF)}')
+        echo "SOURCE_REPO=$SOURCE_REPO" >> $GITHUB_ENV
+        DEVICE_TARGET=$(cat .config | grep CONFIG_TARGET_BOARD | awk -F '"' '{print $2}')
+        echo "DEVICE_TARGET=$DEVICE_TARGET" >> $GITHUB_ENV && echo "DEVICE_TARGET=$DEVICE_TARGET" >> $GITHUB_OUTPUT
+        DEVICE_SUBTARGET=$(cat .config | grep CONFIG_TARGET_SUBTARGET | awk -F '"' '{print $2}')
+        echo "DEVICE_SUBTARGET=$DEVICE_SUBTARGET" >> $GITHUB_ENV && echo "DEVICE_SUBTARGET=$DEVICE_SUBTARGET" >> $GITHUB_OUTPUT
+
+    - name: Check Kernel Version Compatibility
+      run: |
+        cd $OPENWRT_PATH
+        echo "配置文件内核版本：" && grep CONFIG_KERNEL_VERSION .config || echo "未找到内核配置"
+        echo "源码支持内核版本：" && grep KERNEL_PATCHVER target/linux/${DEVICE_TARGET}/Makefile || echo "未找到源码内核定义"
+
+    - name: Clean Toolchain Cache
+      run: |
+        cd $OPENWRT_PATH
+        make toolchain/kernel-headers/clean
+        make toolchain/clean
+        # 清理后确认sed链接
+        SED_SYSTEM=$(which sed)
+        sudo ln -sf $SED_SYSTEM $STAGING_BIN/sed
+        echo "清理缓存后sed链接: $(ls -l $STAGING_BIN/sed)"
+
+    - name: Cache Toolchain
+      if: env.CACHE_TOOLCHAIN == 'true'
+      uses: HiGarfield/cachewrtbuild@main
+      with:
+        ccache: false
+        mixkey: ${{ env.SOURCE_REPO }}-${{ env.REPO_BRANCH }}-${{ env.DEVICE_TARGET }}-${{ env.DEVICE_SUBTARGET }}
+        prefix: ${{ env.OPENWRT_PATH }}
+
+    - name: Install Feeds (Force Update)
+      run: |
+        [ ! -d "$OPENWRT_PATH" ] && echo "错误：源码目录不存在" && exit 1
+        cd $OPENWRT_PATH || { echo "无法进入源码目录"; exit 1; }
+        ./scripts/feeds clean && ./scripts/feeds update -a -f && ./scripts/feeds install -a -f
+        echo "=== 验证ncurses ==="
+        [ -d "package/libs/ncurses" ] && echo "✅ ncurses路径正确" || { echo "❌ ncurses缺失"; exit 1; }
+        [ -d "feeds/packages/utils/pv" ] || { echo "⚠️ 安装pv包"; ./scripts/feeds install -p packages pv; }
+        # 安装feeds后确认sed链接
+        SED_SYSTEM=$(which sed)
+        sudo ln -sf $SED_SYSTEM $STAGING_BIN/sed
+        echo "安装feeds后sed链接: $(ls -l $STAGING_BIN/sed)"
+
+    - name: Confirm ncurses Path & Fix pcre
+      run: |
+        cd $OPENWRT_PATH
+        NCURSES_PATH="package/libs/ncurses"
+        echo "NCURSES_PATH=$NCURSES_PATH" >> $GITHUB_ENV
+        echo "✅ ncurses路径：$NCURSES_PATH"
+        PCRE_PATH="package/libs/pcre"
+        if [ ! -d "$PCRE_PATH" ]; then
+          echo "⚠️ 创建pcre包"
+          mkdir -p $PCRE_PATH
+          printf '%s\n' \
+            'include $(TOPDIR)/rules.mk' \
+            '' \
+            'PKG_NAME:=pcre' \
+            'PKG_VERSION:=8.45' \
+            'PKG_RELEASE:=1' \
+            '' \
+            'PKG_SOURCE:=pcre-$(PKG_VERSION).tar.bz2' \
+            'PKG_SOURCE_URL:=https://downloads.sourceforge.net/project/pcre/pcre/$(PKG_VERSION)/' \
+            'PKG_HASH:=4dae6fdcd2bb0bb6c37b5f97ee0875c2632ad71b36d008a87ad501a7193cde996' \
+            '' \
+            'PKG_INSTALL:=1' \
+            'include $(INCLUDE_DIR)/package.mk' \
+            '' \
+            'define Package/libpcre' \
+            '  SECTION:=libs' \
+            '  CATEGORY:=Libraries' \
+            '  TITLE:=PCRE library' \
+            'endef' \
+            '' \
+            'define Build/Configure' \
+            '  $(call Build/Configure/Default, --enable-utf8)' \
+            'endef' \
+            '' \
+            'define Package/libpcre/install' \
+            '  $(INSTALL_DIR) $(1)/usr/lib' \
+            '  $(CP) $(PKG_INSTALL_DIR)/usr/lib/libpcre.so.* $(1)/usr/lib/' \
+            'endef' \
+            '' \
+            '$(eval $(call BuildPackage,libpcre))' \
+            > "$PCRE_PATH/Makefile"
+        fi
+        echo "✅ pcre路径：$PCRE_PATH"
+
+    - name: Load Custom Configuration & Clean Invalid Dependencies
+      run: |
+        cd $OPENWRT_PATH
+        [ -e "$GITHUB_WORKSPACE/files" ] && mv "$GITHUB_WORKSPACE/files" $OPENWRT_PATH/files || echo "⚠️ 无files目录"
+        DIY_SCRIPT_PATH="$GITHUB_WORKSPACE/$DIY_SCRIPT"
+        if [ -f "$DIY_SCRIPT_PATH" ]; then
+          chmod +x "$DIY_SCRIPT_PATH"
+          echo "✅ 执行自定义脚本：$DIY_SCRIPT_PATH"
+          "$DIY_SCRIPT_PATH"
+        else
+          echo "⚠️ 未找到$DIY_SCRIPT_PATH，跳过"
+        fi
+        PRESET_SCRIPTS_DIR="$GITHUB_WORKSPACE/scripts"
+        if [ -d "$PRESET_SCRIPTS_DIR" ]; then
+          chmod +x "$PRESET_SCRIPTS_DIR"/*.sh
+          echo "✅ 执行Clash内核预设"
+          "$PRESET_SCRIPTS_DIR/preset-clash-core.sh" $CLASH_KERNEL
+          echo "✅ 执行终端工具预设"
+          "$PRESET_SCRIPTS_DIR/preset-terminal-tools.sh"
+        else
+          echo "⚠️ 无scripts目录，跳过"
+        fi
+        rm -rf $(find package/feeds/ -name "luci-app-msd_lite" -o -name "msd_lite")
+        echo "✅ 清理冲突依赖完成"
+        # 处理配置后确认sed链接
+        SED_SYSTEM=$(which sed)
+        sudo ln -sf $SED_SYSTEM $STAGING_BIN/sed
+        echo "配置处理后sed链接: $(ls -l $STAGING_BIN/sed)"
 
     - name: Enable Required Dependencies
       run: |
@@ -172,48 +310,53 @@ jobs:
         echo "CONFIG_PACKAGE_libpcre=y" >> .config
         sed -i '/CONFIG_PACKAGE_msd_lite/d' .config
         make defconfig
-        # 依赖处理后再次确认sed
+        echo "=== 依赖配置验证 ==="
+        grep "CONFIG_PACKAGE_ncursesw=y" .config && grep "CONFIG_PACKAGE_libpcre=y" .config || echo "⚠️ 依赖已添加"
+        # 依赖处理后确认sed链接
         SED_SYSTEM=$(which sed)
         sudo ln -sf $SED_SYSTEM $STAGING_BIN/sed
-        echo "依赖处理后重建sed链接: $STAGING_BIN/sed -> $SED_SYSTEM"
+        echo "依赖处理后sed链接: $(ls -l $STAGING_BIN/sed)"
+        true
 
-    # 核心修复：编译lua前5秒内强制创建sed链接
-    - name: Force Create sed Link Before lua Compile
+    # 核心修复：编译lua前最终确认sed可用
+    - name: Force Verify sed Before lua Compile
       run: |
-        echo "=== 编译lua前最后一次强制创建sed链接 ==="
+        echo "=== 编译lua前最后验证sed ==="
+        # 1. 确认目录权限
+        echo "staging目录权限: $(ls -ld $STAGING_BIN)"
+        # 2. 确认sed链接
         SED_SYSTEM=$(which sed)
-        # 确认staging目录存在且可写
-        mkdir -p $STAGING_BIN
-        sudo chmod 777 $STAGING_BIN
-        # 强制覆盖创建sed链接
         sudo ln -sf $SED_SYSTEM $STAGING_BIN/sed
-        # 验证链接有效性（模拟lua编译时的调用）
-        echo "验证sed能否执行替换命令..."
+        echo "当前sed链接: $(ls -l $STAGING_BIN/sed)"
+        # 3. 验证sed可执行
+        if ! $STAGING_BIN/sed --version >/dev/null 2>&1; then
+          echo "❌ sed执行失败，紧急修复：直接复制系统sed到staging目录"
+          sudo cp $SED_SYSTEM $STAGING_BIN/sed  # 直接复制二进制文件（终极方案）
+          chmod +x $STAGING_BIN/sed
+        fi
+        # 4. 再次验证替换功能
         TEST_FILE=$(mktemp)
         echo '"/usr/local/test"' > $TEST_FILE
         $STAGING_BIN/sed -i -e 's,"/usr/local/","/test/path/",' $TEST_FILE
         if grep -q '"/test/path/test"' $TEST_FILE; then
-          echo "✅ 最终sed验证通过（可执行替换）"
+          echo "✅ 最终sed功能验证通过"
         else
-          echo "❌ 最终sed验证失败"
-          ls -l $STAGING_BIN/sed  # 输出链接信息
-          which sed  # 输出系统sed路径
+          echo "❌ 最终sed功能验证失败"
           exit 1
         fi
         rm -f $TEST_FILE
-        # 输出链接信息备查
-        echo "当前sed链接: $(ls -l $STAGING_BIN/sed)"
-        echo "当前sed版本: $($STAGING_BIN/sed --version | head -n1)"
 
-    # 编译lua的步骤会自动调用sed，此时链接已确保有效
-    - name: Pre-Compile lua (确保优先编译lua)
+    # 优先编译lua，确保sed正常工作
+    - name: Pre-Compile lua
       run: |
         cd $OPENWRT_PATH
-        echo "=== 优先编译lua，确保sed正常工作 ==="
+        echo "=== 优先编译lua ==="
         make package/utils/lua/host/compile V=s
-        # 验证lua编译产物
-        find build_dir/hostpkg/lua-5.1.5/ -name "lua"
-        [ $? -eq 0 ] || { echo "❌ lua编译失败"; exit 1; }
+        # 验证lua编译结果
+        if [ ! -f "build_dir/hostpkg/lua-5.1.5/src/lua" ]; then
+          echo "❌ lua编译失败"
+          exit 1
+        fi
         echo "✅ lua预编译成功"
 
     # 剩余步骤保持不变...
@@ -264,4 +407,34 @@ jobs:
         [ $? -eq 0 ] || { echo "❌ ncursesw编译失败"; exit 1; }
         echo "✅ ncurses预编译成功"
 
-    # 其他步骤保持不变...
+    - name: Pre-Compile pv
+      run: |
+        cd $OPENWRT_PATH
+        echo "=== 预编译pv ==="
+        make package/feeds/packages/pv/compile V=s
+        find bin/packages/*/*/ -name "pv-*.apk"
+        [ $? -eq 0 ] || { echo "❌ pv编译失败"; exit 1; }
+        echo "✅ pv预编译成功"
+
+    - name: Download Dependent Packages
+      run: |
+        cd $OPENWRT_PATH
+        make defconfig
+        make download -j8
+        find dl -size -1024c -exec rm -f {} \;
+        echo "✅ 依赖包下载完成"
+
+    - name: Compile Firmware
+      id: compile
+      run: |
+        cd $OPENWRT_PATH
+        mkdir -p files/etc/uci-defaults
+        cp $GITHUB_WORKSPACE/scripts/init-settings.sh files/etc/uci-defaults/99-init-settings
+        echo "=== 用$(nproc)线程编译 ==="
+        make -j$(nproc) V=s || make -j1 V=s
+        echo "status=success" >> $GITHUB_OUTPUT
+        echo "DATE=$(date +"%Y-%m-%d %H:%M:%S")" >> $GITHUB_ENV
+        echo "FILE_DATE=$(date +"%Y.%m.%d")" >> $GITHUB_ENV
+        echo "✅ 固件编译完成"
+
+    # 后续步骤保持不变...
