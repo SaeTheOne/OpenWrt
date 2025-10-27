@@ -248,15 +248,34 @@ jobs:
     - name: Load Custom Configuration & Clean Invalid Dependencies
       run: |
         cd $OPENWRT_PATH
-        # 复制自定义脚本和文件
-        [ -e files ] && mv files $OPENWRT_PATH/files
-        chmod +x $GITHUB_WORKSPACE/scripts/*.sh && chmod +x $DIY_SCRIPT
-        $GITHUB_WORKSPACE/$DIY_SCRIPT  # 执行自定义脚本
-        $GITHUB_WORKSPACE/scripts/preset-clash-core.sh $CLASH_KERNEL  # 预设Clash内核
-        $GITHUB_WORKSPACE/scripts/preset-terminal-tools.sh  # 预设终端工具
-        # 彻底删除msd_lite（避免依赖冲突）
+        # 1. 复制自定义文件（如有）
+        [ -e "$GITHUB_WORKSPACE/files" ] && mv "$GITHUB_WORKSPACE/files" $OPENWRT_PATH/files || echo "⚠️ 未找到自定义files目录，跳过"
+    
+        # 2. 处理自定义脚本（diy-script.sh）：存在则执行，不存在则跳过
+        DIY_SCRIPT_PATH="$GITHUB_WORKSPACE/$DIY_SCRIPT"  # 脚本完整路径
+        if [ -f "$DIY_SCRIPT_PATH" ]; then
+          chmod +x "$DIY_SCRIPT_PATH"  # 仅当脚本存在时加执行权限
+          echo "✅ 找到自定义脚本，执行：$DIY_SCRIPT_PATH"
+          "$DIY_SCRIPT_PATH"  # 运行自定义脚本
+        else
+          echo "⚠️ 未找到 $DIY_SCRIPT_PATH，跳过自定义脚本执行"
+        fi
+    
+        # 3. 执行预设脚本（终端工具、Clash内核，确保路径正确）
+        PRESET_SCRIPTS_DIR="$GITHUB_WORKSPACE/scripts"
+        if [ -d "$PRESET_SCRIPTS_DIR" ]; then
+          chmod +x "$PRESET_SCRIPTS_DIR"/*.sh  # 给scripts目录下所有脚本加权限
+          echo "✅ 执行Clash内核预设脚本"
+          "$PRESET_SCRIPTS_DIR/preset-clash-core.sh" $CLASH_KERNEL
+          echo "✅ 执行终端工具预设脚本"
+          "$PRESET_SCRIPTS_DIR/preset-terminal-tools.sh"
+        else
+          echo "⚠️ 未找到 $PRESET_SCRIPTS_DIR 目录，跳过预设脚本执行"
+        fi
+    
+        # 4. 彻底删除msd_lite（避免依赖冲突）
         rm -rf $(find package/feeds/ -name "luci-app-msd_lite" -o -name "msd_lite")
-        echo "✅ 自定义配置加载完成，无效依赖已删除"
+        echo "✅ 无效依赖（msd_lite）已删除"
 
     # 16. 启用必要依赖（ncurses、pcre）
     - name: Enable Required Dependencies
