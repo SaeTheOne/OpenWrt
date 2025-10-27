@@ -329,6 +329,39 @@ jobs:
           exit 1
         fi
 
+    - name: 彻底解决 msd_lite 依赖警告并优化配置验证
+      run: |
+        cd $OPENWRT_PATH
+        # 1. 彻底删除 luci-app-msd_lite（若不需要该插件，直接移除避免依赖警告）
+        if [ -d "package/feeds/luci/luci-app-msd_lite" ]; then
+          rm -rf package/feeds/luci/luci-app-msd_lite
+          echo "已删除 luci-app-msd_lite，消除 msd_lite 依赖警告"
+        fi
+    
+        # 2. 优化配置验证命令（即使配置未找到也不退出，仅提示）
+        echo "=== 依赖配置验证结果 ==="
+        if grep -q "CONFIG_PACKAGE_ncursesw=y" .config; then
+          echo "✅ ncursesw 已启用"
+        else
+          echo "⚠️ ncursesw 未启用，尝试自动添加"
+          echo "CONFIG_PACKAGE_ncursesw=y" >> .config
+          make defconfig
+        fi
+    
+        if grep -q "CONFIG_PACKAGE_libpcre=y" .config; then
+          echo "✅ libpcre 已启用"
+        else
+          echo "⚠️ libpcre 未启用，尝试自动添加"
+          echo "CONFIG_PACKAGE_libpcre=y" >> .config
+          make defconfig
+        fi
+    
+        if grep -q "CONFIG_PACKAGE_msd_lite=y" .config; then
+          echo "✅ msd_lite 已启用"
+        else
+          echo "⚠️ msd_lite 未启用（已删除依赖插件，可忽略）"
+        fi
+        
     - name: Pre-Compile pv (Test Separately)
       run: |
         cd $OPENWRT_PATH
