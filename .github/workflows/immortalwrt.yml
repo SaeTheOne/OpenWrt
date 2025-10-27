@@ -21,7 +21,7 @@ env:
   BASE_PATH: "/home/runner/work/OpenWrt/OpenWrt"
   OPENWRT_DIR: "/home/runner/work/OpenWrt/OpenWrt/openwrt"
   STAGING_BIN: "/home/runner/work/OpenWrt/OpenWrt/openwrt/staging_dir/host/bin"
-  SED_SYSTEM: "/usr/bin/sed"  # 明确系统sed路径
+  INDEPENDENT_SED: "/home/runner/work/OpenWrt/OpenWrt/sed"  # 独立sed路径
 
 jobs:
   Build:
@@ -51,7 +51,7 @@ jobs:
         echo "--------------------------硬盘信息--------------------------"
         echo "硬盘数量: $(ls /dev/sd* | grep -v [1-9] | wc -l)" && df -hT
 
-    - name: Initialization Environment
+    - name: Initialization & Deploy Independent sed
       env:
         DEBIAN_FRONTEND: noninteractive
       run: |
@@ -62,39 +62,46 @@ jobs:
         sudo rm -rf /usr/share/dotnet /etc/apt/sources.list.d /usr/local/lib/android $AGENT_TOOLSDIRECTORY
         sudo -E apt-get -y purge azure-cli ghc* zulu* firefox google* dotnet* powershell openjdk* mongodb* moby* || true
         
-        # 修复1：强制重新安装sed（确保二进制文件完好）
+        # 安装基础依赖
         sudo -E apt-get -y update
-        sudo -E apt-get -y --reinstall install sed  # 重新安装sed，修复可能的损坏
         sudo -E apt-get -y install $(curl -fsSL is.gd/depends_ubuntu_2204) bison flex libelf-dev libssl-dev libdeflate-tools
         sudo -E apt-get -y install antlr3 asciidoc autopoint ecj fastjar gnutls-dev haveged \
-          llvm lld mkisofs msmtp qemu-utils re2c swig uglifyjs upx-ucl
+          llvm lld mkisofs msmtp qemu-utils re2c swig uglifyjs upx-ucl wget
         sudo -E systemctl daemon-reload
         sudo -E apt-get -y autoremove --purge
         sudo -E apt-get -y clean
         sudo timedatectl set-timezone "$TZ"
 
-        # 验证系统sed是否正常工作
-        echo "=== 验证系统sed基本功能 ==="
-        TEST_SYS_FILE=$(mktemp)
-        echo 'test: /usr/local/' > $TEST_SYS_FILE
-        $SED_SYSTEM -i -e 's,/usr/local/,/test/,g' $TEST_SYS_FILE
-        if grep -q 'test: /test/' $TEST_SYS_FILE; then
-          echo "✅ 系统sed功能正常"
+        # 部署独立sed（核心修复）
+        echo "=== 部署独立sed ==="
+        mkdir -p $(dirname $INDEPENDENT_SED)
+        # 从Ubuntu仓库下载sed二进制包
+        wget -q -O /tmp/sed.deb http://archive.ubuntu.com/ubuntu/pool/main/s/sed/sed_4.8-1ubuntu2_amd64.deb
+        dpkg-deb -x /tmp/sed.deb /tmp/sed_extract
+        sudo cp /tmp/sed_extract/usr/bin/sed $INDEPENDENT_SED
+        sudo chmod +x $INDEPENDENT_SED
+        # 预验证独立sed功能（简化测试逻辑）
+        TEST_PRE=$(mktemp)
+        echo '/usr/local/' > $TEST_PRE  # 测试内容：带结尾/，确保匹配
+        $INDEPENDENT_SED -i -e 's,/usr/local/,/test/path/,,' $TEST_PRE  # 用逗号分隔，避免冲突
+        if grep -q '/test/path/' $TEST_PRE; then
+          echo "✅ 独立sed预验证通过"
         else
-          echo "❌ 系统sed损坏，紧急修复"
-          # 若系统sed彻底损坏，手动下载sed二进制
-          sudo wget -O $SED_SYSTEM https://github.com/mirror/musl/blob/master/tools/sed?raw=true
-          sudo chmod +x $SED_SYSTEM
-          # 再次验证
-          $SED_SYSTEM --version || { echo "致命错误：sed无法修复"; exit 1; }
+          echo "❌ 独立sed失效，尝试备用源"
+          wget -q -O /tmp/sed.deb http://ftp.debian.org/debian/pool/main/s/sed/sed_4.8-1_amd64.deb
+          dpkg-deb -x /tmp/sed.deb /tmp/sed_extract
+          sudo cp /tmp/sed_extract/usr/bin/sed $INDEPENDENT_SED
+          sudo chmod +x $INDEPENDENT_SED
+          $INDEPENDENT_SED -i -e 's,/usr/local/,/test/path/,,' $TEST_PRE
+          grep -q '/test/path/' $TEST_PRE || { echo "致命错误：独立sed部署失败"; exit 1; }
         fi
-        rm -f $TEST_SYS_FILE
+        rm -f $TEST_PRE /tmp/sed.deb /tmp/sed_extract
 
-        # 创建基础目录
-        mkdir -p $BASE_PATH
+        # 创建工作目录
+        mkdir -p $BASE_PATH $STAGING_BIN
         sudo chown -R runner:runner $BASE_PATH
         sudo chmod -R 777 $BASE_PATH
-        echo "✅ 基础工作目录创建完成：$(ls -ld $BASE_PATH)"
+        echo "✅ 环境初始化完成"
 
     - name: Combine Disks
       uses: easimon/maximize-build-space@master
@@ -109,7 +116,7 @@ jobs:
     - name: Checkout
       uses: actions/checkout@main
 
-    - name: Clone Source Code to Workspace
+    - name: Clone Source Code
       id: clone
       run: |
         echo "=== 工作目录空间 ==="
@@ -119,19 +126,12 @@ jobs:
         git clone $REPO_URL -b $REPO_BRANCH $OPENWRT_DIR
         echo "OPENWRT_PATH=$OPENWRT_DIR" >> $GITHUB_ENV
 
-        # 创建staging目录结构
+        # 部署sed到staging目录（直接复制，不依赖链接）
         mkdir -p $STAGING_BIN
-        if [ ! -d "$STAGING_BIN" ]; then
-          echo "❌ 无法创建$STAGING_BIN目录"
-          ls -ld $(dirname $STAGING_BIN)
-          exit 1
-        fi
-
-        # 授权并创建sed链接
         sudo chown -R runner:runner $OPENWRT_DIR
         sudo chmod -R 777 $STAGING_BIN
-        sudo ln -sf $SED_SYSTEM $STAGING_BIN/sed
-        echo "克隆后sed链接：$(ls -l $STAGING_BIN/sed)"
+        sudo cp $INDEPENDENT_SED $STAGING_BIN/sed
+        echo "staging目录sed部署：$(ls -l $STAGING_BIN/sed)"
 
         # 提取提交信息
         cd $OPENWRT_DIR
@@ -144,79 +144,81 @@ jobs:
         COMMIT_HASH=$(git show -s --date=short --format="hash: %H")
         echo "COMMIT_HASH=$COMMIT_HASH" >> $GITHUB_ENV && echo "COMMIT_HASH=$COMMIT_HASH" >> $GITHUB_OUTPUT
 
-    - name: Fix All System Tools Path
+    - name: Fix Toolchain Paths
       run: |
         mkdir -p $STAGING_BIN
         sudo chmod -R 777 $STAGING_BIN
 
-        # 重建sed链接（使用绝对路径）
-        sudo rm -f $STAGING_BIN/sed
-        sudo ln -s $SED_SYSTEM $STAGING_BIN/sed
-        echo "sed链接: $(ls -l $STAGING_BIN/sed)"
-        $STAGING_BIN/sed --version || { echo "❌ sed链接失败"; exit 1; }
+        # 确保sed是独立版本
+        sudo cp $INDEPENDENT_SED $STAGING_BIN/sed
+        echo "sed版本：$($STAGING_BIN/sed --version | head -n1)"
 
-        # 其他工具
+        # 链接其他工具
         CORE_TOOLS=(grep awk cp mv rm tar gzip bzip2 xz make gcc g++ patch perl python3 curl wget git)
         for tool in "${CORE_TOOLS[@]}"; do
           TOOL_PATH=$(which $tool)
           sudo ln -sf $TOOL_PATH $STAGING_BIN/$tool
-          echo "$tool链接: $(ls -l $STAGING_BIN/$tool)"
         done
 
-    # 中间步骤省略（保持不变）...
-
-    - name: Force Verify sed Before lua Compile
+    - name: Generate Variables
+      id: variable
       run: |
-        echo "=== 编译lua前验证 sed 功能 ==="
-    
-        # 使用一个极简、无歧义的测试字符串，避免路径干扰
-        TEST_SIMPLE=$(mktemp)
-        echo "foo" > $TEST_SIMPLE
-    
-        echo "原始测试文件内容:"
-        cat $TEST_SIMPLE
-    
-        # 使用简单的 sed 替换：foo -> bar
-        $SED_SYSTEM -i -e 's,foo,bar,' $TEST_SIMPLE
-    
-        echo "替换后测试文件内容:"
-        cat $TEST_SIMPLE
-    
-        if grep -q 'bar' $TEST_SIMPLE; then
-          echo "✅ 系统 sed 功能正常（简单测试通过）"
-        else
-          echo "❌ 系统 sed 替换功能异常，尝试重新安装"
-          sudo apt-get -y --reinstall install sed
-          $SED_SYSTEM -i -e 's,foo,bar,' $TEST_SIMPLE
-          if grep -q 'bar' $TEST_SIMPLE; then
-            echo "✅ 系统 sed 重装后功能恢复"
-          else
-            echo "❌ 系统 sed 仍然不可用，尝试直接使用 sed 二进制路径: $SED_SYSTEM"
-            $SED_SYSTEM --version || { echo "❌ 无法获取 sed 版本，sed 可能已损坏"; exit 1; }
-    
-            # 终极备用方案：使用绝对路径调用 sed，或者换用其他工具
-            echo "尝试直接调用 sed，使用绝对路径："
-            /usr/bin/sed -i -e 's,foo,bar,' $TEST_SIMPLE
-            if grep -q 'bar' $TEST_SIMPLE; then
-              echo "✅ /usr/bin/sed 直接调用成功"
-            else
-              echo "❌ 致命错误：所有 sed 方案均失败，无法继续编译"
-              exit 1
-            fi
-          fi
+        cp $CONFIG_FILE $OPENWRT_DIR/.config
+        cd $OPENWRT_DIR && make defconfig > /dev/null 2>&1
+        SOURCE_REPO=$(echo $REPO_URL | awk -F '/' '{print $(NF)}')
+        echo "SOURCE_REPO=$SOURCE_REPO" >> $GITHUB_ENV
+        DEVICE_TARGET=$(cat .config | grep CONFIG_TARGET_BOARD | awk -F '"' '{print $2}')
+        echo "DEVICE_TARGET=$DEVICE_TARGET" >> $GITHUB_ENV && echo "DEVICE_TARGET=$DEVICE_TARGET" >> $GITHUB_OUTPUT
+        DEVICE_SUBTARGET=$(cat .config | grep CONFIG_TARGET_SUBTARGET | awk -F '"' '{print $2}')
+        echo "DEVICE_SUBTARGET=$DEVICE_SUBTARGET" >> $GITHUB_ENV && echo "DEVICE_SUBTARGET=$DEVICE_SUBTARGET" >> $GITHUB_OUTPUT
+
+    - name: Install Feeds
+      run: |
+        cd $OPENWRT_DIR
+        ./scripts/feeds clean && ./scripts/feeds update -a -f && ./scripts/feeds install -a -f
+
+    - name: Load Custom Config
+      run: |
+        cd $OPENWRT_DIR
+        [ -e "$GITHUB_WORKSPACE/files" ] && mv "$GITHUB_WORKSPACE/files" $OPENWRT_DIR/files || true
+        DIY_SCRIPT_PATH="$GITHUB_WORKSPACE/$DIY_SCRIPT"
+        if [ -f "$DIY_SCRIPT_PATH" ]; then
+          chmod +x "$DIY_SCRIPT_PATH" && "$DIY_SCRIPT_PATH"
         fi
-    
-        rm -f $TEST_SIMPLE
-    
+        make defconfig
+
+    - name: Verify sed Before Compile
+      run: |
+        echo "=== 编译前验证sed ==="
+        mkdir -p $STAGING_BIN
+        sudo cp $INDEPENDENT_SED $STAGING_BIN/sed  # 强制覆盖
+
+        # 优化测试逻辑：简化内容+逗号分隔符
+        TEST_FILE=$(mktemp)
+        echo '/usr/local/' > $TEST_FILE  # 内容带结尾/，与匹配模式一致
+        $STAGING_BIN/sed -i -e 's,/usr/local/,/test/path/,,' $TEST_FILE  # 用逗号分隔，避免冲突
+        echo "sed处理后内容："
+        cat $TEST_FILE
+        if grep -q '/test/path/' $TEST_FILE; then
+          echo "✅ sed功能验证通过"
+        else
+          echo "❌ sed验证失败"
+          exit 1
+        fi
+        rm -f $TEST_FILE
+
     - name: Pre-Compile lua
       run: |
         cd $OPENWRT_DIR
-        echo "=== 优先编译lua ==="
+        echo "=== 编译lua ==="
+        export PATH=$STAGING_BIN:$PATH
         make package/utils/lua/host/compile V=s
-        if [ ! -f "build_dir/hostpkg/lua-5.1.5/src/lua" ]; then
-          echo "❌ lua编译失败"
-          exit 1
-        fi
-        echo "✅ lua预编译成功"
+        [ -f "build_dir/hostpkg/lua-5.1.5/src/lua" ] || { echo "❌ lua编译失败"; exit 1; }
+        echo "✅ lua编译成功"
 
-    # 剩余步骤保持不变...
+    - name: Compile Firmware
+      run: |
+        cd $OPENWRT_DIR
+        echo "=== 开始编译固件 ==="
+        make -j$(nproc) V=s || make -j1 V=s
+        echo "✅ 固件编译完成"
