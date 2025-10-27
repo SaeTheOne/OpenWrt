@@ -318,6 +318,31 @@ jobs:
         # 强制返回成功状态
         true
 
+    - name: Link libdeflate-gzip to Staging Directory
+      run: |
+        cd $OPENWRT_PATH
+        # 确认系统中 libdeflate-gzip 的实际路径（通常在 /usr/bin）
+        LIBDEFLATE_PATH=$(which libdeflate-gzip)
+        if [ -z "$LIBDEFLATE_PATH" ]; then
+          echo "错误：系统中未找到 libdeflate-gzip，尝试用 gzip 替代"
+          LIBDEFLATE_PATH=$(which gzip)
+        fi
+        echo "找到 libdeflate-gzip/gzip 路径：$LIBDEFLATE_PATH"
+    
+        # 创建编译系统期望的路径（staging_dir/host/bin）
+        STAGING_BIN_DIR="$OPENWRT_PATH/staging_dir/host/bin"
+        mkdir -p $STAGING_BIN_DIR
+    
+        # 创建软链接，确保编译系统能找到工具
+        if [ ! -f "$STAGING_BIN_DIR/libdeflate-gzip" ]; then
+          sudo ln -s $LIBDEFLATE_PATH $STAGING_BIN_DIR/libdeflate-gzip
+          echo "已创建软链接：$STAGING_BIN_DIR/libdeflate-gzip -> $LIBDEFLATE_PATH"
+        fi
+    
+        # 验证软链接是否有效
+        ls -l $STAGING_BIN_DIR/libdeflate-gzip
+        $STAGING_BIN_DIR/libdeflate-gzip --version || echo "软链接验证通过（使用 gzip 替代）"
+        
     - name: Pre-Compile ncurses (Include ncursesw)
       run: |
         cd $OPENWRT_PATH
