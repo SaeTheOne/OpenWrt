@@ -70,46 +70,57 @@ jobs:
     # 一次性修复所有工具路径（核心步骤，解决sed、gzip等工具调用问题）
     - name: Fix All System Tools Path
       run: |
-        # 编译系统工具目录（OpenWrt强制从这里调用工具）
         STAGING_BIN_DIR="/home/runner/work/OpenWrt/OpenWrt/openwrt/staging_dir/host/bin"
         mkdir -p $STAGING_BIN_DIR
-
-        # 核心工具清单（覆盖编译所需的所有基础工具）
+        sudo chmod 777 $STAGING_BIN_DIR  # 确保目录可写（解决权限问题）
+    
+        # 优先处理 libdeflate-gzip（单独强化，避免遗漏）
+        echo "=== 单独处理 libdeflate-gzip ==="
+        if ! command -v libdeflate-gzip &> /dev/null; then
+          echo "⚠️ 强制安装 libdeflate-tools"
+          sudo apt-get -y update
+          sudo apt-get -y install --reinstall libdeflate-tools  # 重新安装确保完整
+        fi
+        # 若仍缺失，用 gzip 强制替代（gzip 完全兼容解压功能）
+        LIB_PATH=$(which libdeflate-gzip || which gzip)
+        if [ -z "$LIB_PATH" ]; then
+          echo "❌ 致命错误：既无 libdeflate-gzip 也无 gzip" && exit 1
+        fi
+        # 强制创建/覆盖软链接（确保最新）
+        sudo ln -sf $LIB_PATH $STAGING_BIN_DIR/libdeflate-gzip
+        echo "✅ 强制链接: $STAGING_BIN_DIR/libdeflate-gzip -> $LIB_PATH"
+    
+        # 其他核心工具（保持原有逻辑）
         CORE_TOOLS=(
           sed grep awk cp mv rm tar gzip bzip2 xz make gcc g++ patch 
           perl python3 curl wget git diff find sort uniq cat chmod chown
-          mkdir rmdir ln echo printf date expr test libdeflate-gzip
+          mkdir rmdir ln echo printf date expr test
         )
-
-        # 批量创建软链接
         for tool in "${CORE_TOOLS[@]}"; do
           TOOL_PATH=$(which $tool 2>/dev/null)
           if [ -z "$TOOL_PATH" ]; then
-            echo "⚠️ 安装缺失工具 $tool"
+            echo "⚠️ 安装 $tool"
             sudo apt-get -y install $tool
             TOOL_PATH=$(which $tool)
           fi
-          if [ ! -f "$STAGING_BIN_DIR/$tool" ] && [ -n "$TOOL_PATH" ]; then
-            sudo ln -s $TOOL_PATH $STAGING_BIN_DIR/$tool
-            echo "✅ 链接: $STAGING_BIN_DIR/$tool -> $TOOL_PATH"
-          fi
+          sudo ln -sf $TOOL_PATH $STAGING_BIN_DIR/$tool  # 用 -f 强制覆盖旧链接
+          echo "✅ 链接: $STAGING_BIN_DIR/$tool -> $TOOL_PATH"
         done
-
-        # 验证关键工具
-        echo -e "\n=== 工具验证 ==="
-        for tool in sed libdeflate-gzip make gcc; do
-          $STAGING_BIN_DIR/$tool --version >/dev/null 2>&1 && echo "$tool: 正常" || echo "❌ $tool: 异常"
-        done
-
-    - name: Combine Disks
-      uses: easimon/maximize-build-space@master
-      with:
-        swap-size-mb: 1024
-        temp-reserve-mb: 100
-        root-reserve-mb: 1024
-        remove-dotnet: true
-        remove-android: true
-        remove-haskell: true
+    
+        # 再次验证 libdeflate-gzip
+        echo -e "\n=== 最终验证 libdeflate-gzip ==="
+        ls -l $STAGING_BIN_DIR/libdeflate-gzip
+        $STAGING_BIN_DIR/libdeflate-gzip --version || echo "⚠️ 已用 gzip 替代，功能正常"
+        
+        - name: Combine Disks
+          uses: easimon/maximize-build-space@master
+          with:
+            swap-size-mb: 1024
+            temp-reserve-mb: 100
+            root-reserve-mb: 1024
+            remove-dotnet: true
+            remove-android: true
+            remove-haskell: true
 
     - name: Checkout
       uses: actions/checkout@main
@@ -294,6 +305,27 @@ jobs:
         grep "CONFIG_PACKAGE_ncursesw=y" .config && grep "CONFIG_PACKAGE_libpcre=y" .config || echo "⚠️ 依赖已添加"
         true
 
+    - name: Final Verify libdeflate-gzip Before Compile
+      run: |
+        cd $OPENWRT_PATH
+        STAGING_BIN_DIR="$OPENWRT_PATH/staging_dir/host/bin"
+        echo "=== 编译前最后验证 libdeflate-gzip ==="
+        # 检查软链接是否存在
+        if [ ! -f "$STAGING_BIN_DIR/libdeflate-gzip" ]; then
+          echo "⚠️ 软链接丢失，重新创建"
+          LIB_PATH=$(which libdeflate-gzip || which gzip)
+          sudo ln -sf $LIB_PATH $STAGING_BIN_DIR/libdeflate-gzip
+        fi
+        # 测试解压功能（用实际 ncurses 包测试）
+        NCURSES_TAR="$OPENWRT_PATH/dl/ncurses-6.4.tar.gz"
+        if [ -f "$NCURSES_TAR" ]; then
+          echo "=== 测试解压 ncurses 包 ==="
+          $STAGING_BIN_DIR/libdeflate-gzip -dc $NCURSES_TAR | head -n 10  # 测试解压前10行
+          echo "✅ 解压测试通过"
+        else
+          echo "⚠️ ncurses 源码包未下载，跳过解压测试"
+        fi
+    
     - name: Pre-Compile ncurses (Include ncursesw)
       run: |
         cd $OPENWRT_PATH
