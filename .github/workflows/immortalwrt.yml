@@ -18,10 +18,7 @@ env:
   OPENWRT_RELEASE: true
   OPENWRT_TAG: ARMv8_PLUS
   TZ: Asia/Shanghai
-  BASE_PATH: "/home/runner/work/OpenWrt/OpenWrt"
-  OPENWRT_DIR: "/home/runner/work/OpenWrt/OpenWrt/openwrt"
-  STAGING_BIN: "/home/runner/work/OpenWrt/OpenWrt/openwrt/staging_dir/host/bin"
-  INDEPENDENT_SED: "/home/runner/work/OpenWrt/OpenWrt/sed"  # 独立sed路径
+  INDEPENDENT_SED: "/home/runner/work/OpenWrt/OpenWrt/sed"
 
 jobs:
   Build:
@@ -69,34 +66,64 @@ jobs:
         sudo -E apt-get -y clean
         sudo timedatectl set-timezone "$TZ"
 
-        # 修复：部署独立sed（保留你原版的环境初始化结构，仅新增这部分）
+        # 核心修复：先检查deb包，再找sed路径（解决找不到文件问题）
         echo "=== 部署独立sed ==="
-        mkdir -p $(dirname $INDEPENDENT_SED)
+        mkdir -p $(dirname $INDEPENDENT_SED) /tmp/sed_extract
+        # 1. 下载deb包并检查完整性
         wget -q -O /tmp/sed.deb http://archive.ubuntu.com/ubuntu/pool/main/s/sed/sed_4.8-1ubuntu2_amd64.deb
+        if [ ! -f "/tmp/sed.deb" ] || [ $(stat -c%s /tmp/sed.deb) -lt 1024 ]; then
+          echo "⚠️ deb包下载失败，换用备用源"
+          wget -q -O /tmp/sed.deb http://ftp.debian.org/debian/pool/main/s/sed/sed_4.8-1_amd64.deb
+        fi
+        # 2. 解压并查找sed的实际路径（不依赖固定路径）
         dpkg-deb -x /tmp/sed.deb /tmp/sed_extract
-        sudo cp /tmp/sed_extract/usr/bin/sed $INDEPENDENT_SED
+        SED_DEB_PATH=$(find /tmp/sed_extract -name "sed" -type f -executable | head -n1)
+        if [ -z "$SED_DEB_PATH" ]; then
+          echo "❌ deb包中未找到sed，直接下载二进制"
+          # 备用方案：直接从GNU源下载sed二进制
+          wget -q -O $INDEPENDENT_SED https://ftp.gnu.org/gnu/sed/sed-4.8.tar.gz
+          tar -zxf $INDEPENDENT_SED -C /tmp && cd /tmp/sed-4.8 && ./configure --prefix=/tmp && make && sudo cp /tmp/bin/sed $INDEPENDENT_SED
+        else
+          # 3. 复制找到的sed到目标路径
+          sudo cp $SED_DEB_PATH $INDEPENDENT_SED
+        fi
+        # 4. 确保sed可执行
         sudo chmod +x $INDEPENDENT_SED
-        # 预验证sed（优化测试逻辑）
+        # 5. 验证sed可用性
         TEST_PRE=$(mktemp)
         echo '/usr/local/' > $TEST_PRE
         $INDEPENDENT_SED -i -e 's,/usr/local/,/test/path/,,' $TEST_PRE
-        grep -q '/test/path/' $TEST_PRE || { echo "❌ 独立sed部署失败"; exit 1; }
-        rm -f $TEST_PRE /tmp/sed.deb /tmp/sed_extract
-
-        mkdir -p $BASE_PATH
-        sudo chown -R runner:runner $BASE_PATH
-        sudo chmod -R 777 $BASE_PATH
+        grep -q '/test/path/' $TEST_PRE || { echo "致命错误：独立sed部署失败"; exit 1; }
+        rm -f $TEST_PRE /tmp/sed.deb /tmp/sed_extract /tmp/sed-4.8*
 
     - name: Fix All System Tools Path
       run: |
-        mkdir -p $STAGING_BIN
-        sudo chmod 777 $STAGING_BIN
+        STAGING_BIN_DIR="/home/runner/work/OpenWrt/OpenWrt/openwrt/staging_dir/host/bin"
+        mkdir -p $STAGING_BIN_DIR
+        sudo chmod 777 $STAGING_BIN_DIR
+    
+        # 复制独立sed（沿用修复后的路径）
+        echo "=== 单独处理 sed ==="
+        sudo cp $INDEPENDENT_SED $STAGING_BIN_DIR/sed
+        sudo chmod +x $STAGING_BIN_DIR/sed
+        echo "✅ 强制复制独立sed: $STAGING_BIN_DIR/sed -> $INDEPENDENT_SED"
+        $STAGING_BIN_DIR/sed --version || { echo "❌ sed复制失败"; exit 1; }
 
-        # 修复：用独立sed替换软链接（保留你原版的工具路径步骤，仅修改sed部分）
-        sudo cp $INDEPENDENT_SED $STAGING_BIN/sed
-        echo "✅ sed部署: $STAGING_BIN/sed -> 独立二进制"
-
-        # 保留你原版的其他工具链接逻辑
+        # 处理libdeflate-gzip（保持原版逻辑）
+        echo "=== 单独处理 libdeflate-gzip ==="
+        if ! command -v libdeflate-gzip &> /dev/null; then
+          echo "⚠️ 强制安装 libdeflate-tools"
+          sudo apt-get -y update
+          sudo apt-get -y install --reinstall libdeflate-tools
+        fi
+        LIB_PATH=$(which libdeflate-gzip || which gzip)
+        if [ -z "$LIB_PATH" ]; then
+          echo "❌ 致命错误：既无 libdeflate-gzip 也无 gzip" && exit 1
+        fi
+        sudo ln -sf $LIB_PATH $STAGING_BIN_DIR/libdeflate-gzip
+        echo "✅ 强制链接: $STAGING_BIN_DIR/libdeflate-gzip -> $LIB_PATH"
+    
+        # 其他核心工具（保持原版逻辑）
         CORE_TOOLS=(
           grep awk cp mv rm tar gzip bzip2 xz make gcc g++ patch 
           perl python3 curl wget git diff find sort uniq cat chmod chown
@@ -109,9 +136,15 @@ jobs:
             sudo apt-get -y install $tool
             TOOL_PATH=$(which $tool)
           fi
-          sudo ln -sf $TOOL_PATH $STAGING_BIN/$tool
-          echo "✅ 链接: $STAGING_BIN/$tool -> $TOOL_PATH"
+          sudo ln -sf $TOOL_PATH $STAGING_BIN_DIR/$tool
+          echo "✅ 链接: $STAGING_BIN_DIR/$tool -> $TOOL_PATH"
         done
+    
+        # 最终验证（保持原版逻辑）
+        echo -e "\n=== 最终验证工具 ==="
+        ls -l $STAGING_BIN_DIR/libdeflate-gzip
+        ls -l $STAGING_BIN_DIR/sed
+        $STAGING_BIN_DIR/sed --version
 
     - name: Combine Disks
       uses: easimon/maximize-build-space@master
@@ -134,13 +167,11 @@ jobs:
         git clone $REPO_URL -b $REPO_BRANCH /home/runner/work/OpenWrt/OpenWrt/openwrt
         cd /home/runner/work/OpenWrt/OpenWrt/openwrt
         echo "OPENWRT_PATH=$PWD" >> $GITHUB_ENV
-
-        # 修复：重新部署sed（保留你原版的克隆后逻辑，仅新增sed部署）
-        mkdir -p $STAGING_BIN
-        sudo cp $INDEPENDENT_SED $STAGING_BIN/sed
-        echo "✅ 克隆后sed部署完成"
-
-        # 保留你原版的提交信息提取逻辑
+        # 重新部署sed（保持原版逻辑）
+        STAGING_BIN_DIR="$PWD/staging_dir/host/bin"
+        sudo cp $INDEPENDENT_SED $STAGING_BIN_DIR/sed
+        echo "✅ 克隆后重新部署sed: $STAGING_BIN_DIR/sed"
+        # 提取提交信息（保持原版逻辑）
         COMMIT_AUTHOR=$(git show -s --date=short --format="作者: %an")
         echo "COMMIT_AUTHOR=$COMMIT_AUTHOR" >> $GITHUB_ENV && echo "COMMIT_AUTHOR=$COMMIT_AUTHOR" >> $GITHUB_OUTPUT
         COMMIT_DATE=$(git show -s --date=short --format="时间: %ci")
