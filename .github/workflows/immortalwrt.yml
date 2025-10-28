@@ -400,13 +400,13 @@ jobs:
         "$STAGING_BIN_DIR/libdeflate-gzip" --version || { echo "❌ 工具无效"; exit 1; }
         echo "✅ 预编译前验证通过"
 
-- name: Pre-Compile ncurses (Include ncursesw)
-  run: |
-    cd "$OPENWRT_PATH" || { echo "❌ 进入源码目录失败"; exit 1; }
-    echo "=== 预编译ncurses：$NCURSES_PATH ==="
-    make "$NCURSES_PATH/compile" V=s
-    # ...（其余保持不变）
-    
+    - name: Pre-Compile ncurses (Include ncursesw)
+      run: |
+        cd "$OPENWRT_PATH" || { echo "❌ 进入源码目录失败"; exit 1; }
+        echo "=== 预编译ncurses：$NCURSES_PATH ==="
+        make "$NCURSES_PATH/compile" V=s
+        # ...（其余保持不变）
+        
     # 修复10：将 $OPENWRT_DIR 改为 $OPENWRT_PATH
     - name: Pre-Compile ncurses (Include ncursesw)
       run: |
