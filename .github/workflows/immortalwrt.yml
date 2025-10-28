@@ -1,9 +1,9 @@
 name: immortalwrt
 
 on:
-  workflow_dispatch:
-  schedule:
-    - cron: 0 20 * * *
+  # workflow_dispatch:
+  # schedule:
+  #   - cron: 0 20 * * *
 
 env:
   REPO_URL: https://github.com/immortalwrt/immortalwrt
@@ -52,7 +52,6 @@ jobs:
       env:
         DEBIAN_FRONTEND: noninteractive
       run: |
-        # 以下是你原版的环境清理、依赖安装逻辑，完全保留
         if [ $(docker images -q | wc -l) -gt 0 ]; then
           docker rmi $(docker images -q)
         fi
@@ -67,42 +66,34 @@ jobs:
         sudo -E apt-get -y clean
         sudo timedatectl set-timezone "$TZ"
     
-        # 以下是“部署独立sed”模块，仅修改sed测试命令
         echo "=== 部署并验证sed ==="
-        # 1. 复制系统sed到独立路径（沿用你之前的逻辑）
-        mkdir -p $(dirname $INDEPENDENT_SED)
-        sudo cp $(which sed) $INDEPENDENT_SED
-        sudo chmod +x $INDEPENDENT_SED
+        mkdir -p "$(dirname "$INDEPENDENT_SED")"
+        sudo cp "$(which sed)" "$INDEPENDENT_SED"
+        sudo chmod +x "$INDEPENDENT_SED"
     
-        # 2. 修复sed测试命令（核心修改点）
         TEST_PRE=$(mktemp)
-        echo '/usr/local/' > $TEST_PRE  # 测试内容不变
-        # 关键修复：用|作为分隔符，删除末尾多余的逗号，避免语法错误
-        $INDEPENDENT_SED -i -e 's|/usr/local/|/test/path/|' $TEST_PRE
-        # 验证结果（逻辑不变）
-        if grep -q '/test/path/' $TEST_PRE; then
-          echo "✅ sed语法验证通过，内容：$(cat $TEST_PRE)"
+        echo '/usr/local/' > "$TEST_PRE"
+        "$INDEPENDENT_SED" -i -e 's|/usr/local/|/test/path/|' "$TEST_PRE"
+        if grep -q '/test/path/' "$TEST_PRE"; then
+          echo "✅ sed语法验证通过，内容：$(cat "$TEST_PRE")"
         else
-          echo "❌ sed替换失败，内容：$(cat $TEST_PRE)"
+          echo "❌ sed替换失败，内容：$(cat "$TEST_PRE")"
           exit 1
         fi
-        rm -f $TEST_PRE
-    
+        rm -f "$TEST_PRE"
 
     - name: Fix All System Tools Path
       run: |
         STAGING_BIN_DIR="/home/runner/work/OpenWrt/OpenWrt/openwrt/staging_dir/host/bin"
-        mkdir -p $STAGING_BIN_DIR
-        sudo chmod 777 $STAGING_BIN_DIR
+        mkdir -p "$STAGING_BIN_DIR"
+        sudo chmod 777 "$STAGING_BIN_DIR"
     
-        # 复制独立sed（沿用修复后的路径）
         echo "=== 单独处理 sed ==="
-        sudo cp $INDEPENDENT_SED $STAGING_BIN_DIR/sed
-        sudo chmod +x $STAGING_BIN_DIR/sed
+        sudo cp "$INDEPENDENT_SED" "$STAGING_BIN_DIR/sed"
+        sudo chmod +x "$STAGING_BIN_DIR/sed"
         echo "✅ 强制复制独立sed: $STAGING_BIN_DIR/sed -> $INDEPENDENT_SED"
-        $STAGING_BIN_DIR/sed --version || { echo "❌ sed复制失败"; exit 1; }
+        "$STAGING_BIN_DIR/sed" --version || { echo "❌ sed复制失败"; exit 1; }
 
-        # 处理libdeflate-gzip（保持原版逻辑）
         echo "=== 单独处理 libdeflate-gzip ==="
         if ! command -v libdeflate-gzip &> /dev/null; then
           echo "⚠️ 强制安装 libdeflate-tools"
@@ -113,31 +104,29 @@ jobs:
         if [ -z "$LIB_PATH" ]; then
           echo "❌ 致命错误：既无 libdeflate-gzip 也无 gzip" && exit 1
         fi
-        sudo ln -sf $LIB_PATH $STAGING_BIN_DIR/libdeflate-gzip
+        sudo ln -sf "$LIB_PATH" "$STAGING_BIN_DIR/libdeflate-gzip"
         echo "✅ 强制链接: $STAGING_BIN_DIR/libdeflate-gzip -> $LIB_PATH"
     
-        # 其他核心工具（保持原版逻辑）
         CORE_TOOLS=(
           grep awk cp mv rm tar gzip bzip2 xz make gcc g++ patch 
           perl python3 curl wget git diff find sort uniq cat chmod chown
           mkdir rmdir ln echo printf date expr test
         )
         for tool in "${CORE_TOOLS[@]}"; do
-          TOOL_PATH=$(which $tool 2>/dev/null)
+          TOOL_PATH=$(which "$tool" 2>/dev/null)
           if [ -z "$TOOL_PATH" ]; then
             echo "⚠️ 安装 $tool"
-            sudo apt-get -y install $tool
-            TOOL_PATH=$(which $tool)
+            sudo apt-get -y install "$tool"
+            TOOL_PATH=$(which "$tool")
           fi
-          sudo ln -sf $TOOL_PATH $STAGING_BIN_DIR/$tool
+          sudo ln -sf "$TOOL_PATH" "$STAGING_BIN_DIR/$tool"
           echo "✅ 链接: $STAGING_BIN_DIR/$tool -> $TOOL_PATH"
         done
     
-        # 最终验证（保持原版逻辑）
         echo -e "\n=== 最终验证工具 ==="
-        ls -l $STAGING_BIN_DIR/libdeflate-gzip
-        ls -l $STAGING_BIN_DIR/sed
-        $STAGING_BIN_DIR/sed --version
+        ls -l "$STAGING_BIN_DIR/libdeflate-gzip"
+        ls -l "$STAGING_BIN_DIR/sed"
+        "$STAGING_BIN_DIR/sed" --version
 
     - name: Combine Disks
       uses: easimon/maximize-build-space@master
@@ -148,6 +137,9 @@ jobs:
         remove-dotnet: true
         remove-android: true
         remove-haskell: true
+        exclude-paths: |  # 新增：避免误删sed和工作目录
+          /home/runner/work/OpenWrt/OpenWrt
+          ${{ env.INDEPENDENT_SED }}
 
     - name: Checkout
       uses: actions/checkout@main
@@ -156,52 +148,47 @@ jobs:
       id: clone
       run: |
         echo "=== 工作目录空间 ==="
-        df -hT /home/runner/work/OpenWrt/OpenWrt
-        # 1. 克隆源码（保持你原版逻辑）
-        git clone $REPO_URL -b $REPO_BRANCH /home/runner/work/OpenWrt/OpenWrt/openwrt
-        cd /home/runner/work/OpenWrt/OpenWrt/openwrt
-        echo "OPENWRT_PATH=$PWD" >> $GITHUB_ENV
-        # 2. 修复：检查并兜底创建独立sed（核心新增逻辑）
+        df -hT "/home/runner/work/OpenWrt/OpenWrt"
+        git clone "$REPO_URL" -b "$REPO_BRANCH" "/home/runner/work/OpenWrt/OpenWrt/openwrt"
+        cd "/home/runner/work/OpenWrt/OpenWrt/openwrt" || { echo "❌ 进入源码目录失败"; exit 1; }
+        echo "OPENWRT_PATH=$PWD" >> "$GITHUB_ENV"
+
         STAGING_BIN_DIR="$PWD/staging_dir/host/bin"
-        # 先确保独立sed路径存在且文件可用
         if [ ! -f "$INDEPENDENT_SED" ]; then
           echo "⚠️ 独立sed文件不存在，紧急兜底创建"
-          # 直接从系统复制sed（绕过之前的部署步骤，确保可用）
-          sudo cp $(which sed) $INDEPENDENT_SED
-          sudo chmod +x $INDEPENDENT_SED
+          sudo cp "$(which sed)" "$INDEPENDENT_SED"
+          sudo chmod +x "$INDEPENDENT_SED"
           echo "✅ 兜底创建独立sed：$INDEPENDENT_SED"
         fi
-        # 3. 再复制sed到staging目录（保持你原版逻辑）
-        mkdir -p $STAGING_BIN_DIR  # 确保staging目录存在
-        sudo cp $INDEPENDENT_SED $STAGING_BIN_DIR/sed
-        sudo chmod +x $STAGING_BIN_DIR/sed
+        mkdir -p "$STAGING_BIN_DIR"
+        sudo cp "$INDEPENDENT_SED" "$STAGING_BIN_DIR/sed"
+        sudo chmod +x "$STAGING_BIN_DIR/sed"
         echo "✅ 克隆后重新部署sed: $STAGING_BIN_DIR/sed"
-        # 4. 提取提交信息（完全保持你原版逻辑）
+
         COMMIT_AUTHOR=$(git show -s --date=short --format="作者: %an")
-        echo "COMMIT_AUTHOR=$COMMIT_AUTHOR" >> $GITHUB_ENV && echo "COMMIT_AUTHOR=$COMMIT_AUTHOR" >> $GITHUB_OUTPUT
+        echo "COMMIT_AUTHOR=$COMMIT_AUTHOR" >> "$GITHUB_ENV" && echo "COMMIT_AUTHOR=$COMMIT_AUTHOR" >> "$GITHUB_OUTPUT"
         COMMIT_DATE=$(git show -s --date=short --format="时间: %ci")
-        echo "COMMIT_DATE=$COMMIT_DATE" >> $GITHUB_ENV && echo "COMMIT_DATE=$COMMIT_DATE" >> $GITHUB_OUTPUT
+        echo "COMMIT_DATE=$COMMIT_DATE" >> "$GITHUB_ENV" && echo "COMMIT_DATE=$COMMIT_DATE" >> "$GITHUB_OUTPUT"
         COMMIT_MESSAGE=$(git show -s --date=short --format="内容: %s")
-        echo "COMMIT_MESSAGE=$COMMIT_MESSAGE" >> $GITHUB_ENV && echo "COMMIT_MESSAGE=$COMMIT_MESSAGE" >> $GITHUB_OUTPUT
+        echo "COMMIT_MESSAGE=$COMMIT_MESSAGE" >> "$GITHUB_ENV" && echo "COMMIT_MESSAGE=$COMMIT_MESSAGE" >> "$GITHUB_OUTPUT"
         COMMIT_HASH=$(git show -s --date=short --format="hash: %H")
-        echo "COMMIT_HASH=$COMMIT_HASH" >> $GITHUB_ENV && echo "COMMIT_HASH=$COMMIT_HASH" >> $GITHUB_OUTPUT
+        echo "COMMIT_HASH=$COMMIT_HASH" >> "$GITHUB_ENV" && echo "COMMIT_HASH=$COMMIT_HASH" >> "$GITHUB_OUTPUT"
         echo "=== 源码目录权限 ==="
-        ls -ld /home/runner/work/OpenWrt/OpenWrt/openwrt
-        
+        ls -ld "$PWD"
 
     - name: Verify Essential Scripts Exist
       run: |
-        cd $OPENWRT_PATH  # 原代码使用了 OPENWRT_DIR，这里修正为 OPENWRT_PATH
+        cd "$OPENWRT_PATH" || { echo "❌ 进入源码目录失败"; exit 1; }
         echo "=== 验证scripts/feeds ==="
         if [ ! -f "scripts/feeds" ]; then
           echo "❌ 重新克隆源码"
-          rm -rf /home/runner/work/OpenWrt/OpenWrt/openwrt
-          git clone $REPO_URL -b $REPO_BRANCH /home/runner/work/OpenWrt/OpenWrt/openwrt
-          cd /home/runner/work/OpenWrt/OpenWrt/openwrt
-          echo "OPENWRT_PATH=$PWD" >> $GITHUB_ENV  # 确保设置的是 OPENWRT_PATH
+          rm -rf "/home/runner/work/OpenWrt/OpenWrt/openwrt"
+          git clone "$REPO_URL" -b "$REPO_BRANCH" "/home/runner/work/OpenWrt/OpenWrt/openwrt"
+          cd "/home/runner/work/OpenWrt/OpenWrt/openwrt" || { echo "❌ 重新克隆后进入目录失败"; exit 1; }
+          echo "OPENWRT_PATH=$PWD" >> "$GITHUB_ENV"
           [ ! -f "scripts/feeds" ] && echo "致命错误：scripts/feeds缺失" && exit 1
         fi
-        chmod +x scripts/feeds
+        chmod +x "scripts/feeds"
         echo "✅ scripts/feeds验证通过"
 
     - name: Verify Compile Directory
@@ -209,78 +196,82 @@ jobs:
         echo "源码路径：$OPENWRT_PATH"
         echo "=== 目录权限 ===" && ls -ld "$OPENWRT_PATH"
         echo "=== 剩余空间 ===" && df -hT "$OPENWRT_PATH"
-        
+
     - name: Fix Source Code Integrity
       run: |
-        # 增加目录存在性和Git仓库验证
         if [ ! -d "$OPENWRT_PATH" ]; then
           echo "❌ 源码目录 $OPENWRT_PATH 不存在"
           exit 1
         fi
-        cd $OPENWRT_PATH  # 修正为 OPENWRT_PATH
-        # 验证是否为Git仓库
+        cd "$OPENWRT_PATH" || { echo "❌ 进入源码目录失败"; exit 1; }
         if [ ! -d ".git" ]; then
           echo "❌ 不是Git仓库，重新克隆源码"
-          cd ..
-          rm -rf openwrt
-          git clone $REPO_URL -b $REPO_BRANCH openwrt
-          cd openwrt
-          echo "OPENWRT_PATH=$PWD" >> $GITHUB_ENV
+          cd .. || exit 1
+          rm -rf "openwrt"
+          git clone "$REPO_URL" -b "$REPO_BRANCH" "openwrt"
+          cd "openwrt" || { echo "❌ 重新克隆后进入目录失败"; exit 1; }
+          echo "OPENWRT_PATH=$PWD" >> "$GITHUB_ENV"
         fi
         git submodule update --init --recursive
-        git fetch --all && git reset --hard origin/$REPO_BRANCH
+        git fetch --all && git reset --hard "origin/$REPO_BRANCH"
 
+    # 修复1：将 $OPENWRT_DIR 改为 $OPENWRT_PATH，路径加引号
     - name: Generate Variables
       id: variable
       run: |
-        cp $CONFIG_FILE $OPENWRT_DIR/.config
-        cd $OPENWRT_DIR && make defconfig > /dev/null 2>&1
-        SOURCE_REPO=$(echo $REPO_URL | awk -F '/' '{print $(NF)}')
-        echo "SOURCE_REPO=$SOURCE_REPO" >> $GITHUB_ENV
-        DEVICE_TARGET=$(cat .config | grep CONFIG_TARGET_BOARD | awk -F '"' '{print $2}')
-        echo "DEVICE_TARGET=$DEVICE_TARGET" >> $GITHUB_ENV && echo "DEVICE_TARGET=$DEVICE_TARGET" >> $GITHUB_OUTPUT
-        DEVICE_SUBTARGET=$(cat .config | grep CONFIG_TARGET_SUBTARGET | awk -F '"' '{print $2}')
-        echo "DEVICE_SUBTARGET=$DEVICE_SUBTARGET" >> $GITHUB_ENV && echo "DEVICE_SUBTARGET=$DEVICE_SUBTARGET" >> $GITHUB_OUTPUT
+        cp "$CONFIG_FILE" "$OPENWRT_PATH/.config"
+        cd "$OPENWRT_PATH" && make defconfig > /dev/null 2>&1
+        SOURCE_REPO=$(echo "$REPO_URL" | awk -F '/' '{print $(NF)}')
+        echo "SOURCE_REPO=$SOURCE_REPO" >> "$GITHUB_ENV"
+        DEVICE_TARGET=$(cat .config | grep "CONFIG_TARGET_BOARD" | awk -F '"' '{print $2}')
+        echo "DEVICE_TARGET=$DEVICE_TARGET" >> "$GITHUB_ENV" && echo "DEVICE_TARGET=$DEVICE_TARGET" >> "$GITHUB_OUTPUT"
+        DEVICE_SUBTARGET=$(cat .config | grep "CONFIG_TARGET_SUBTARGET" | awk -F '"' '{print $2}')
+        echo "DEVICE_SUBTARGET=$DEVICE_SUBTARGET" >> "$GITHUB_ENV" && echo "DEVICE_SUBTARGET=$DEVICE_SUBTARGET" >> "$GITHUB_OUTPUT"
 
+    # 修复2：将 $OPENWRT_DIR 改为 $OPENWRT_PATH
     - name: Check Kernel Version Compatibility
       run: |
-        cd $OPENWRT_DIR
-        echo "配置文件内核版本：" && grep CONFIG_KERNEL_VERSION .config || echo "未找到内核配置"
-        echo "源码支持内核版本：" && grep KERNEL_PATCHVER target/linux/${DEVICE_TARGET}/Makefile || echo "未找到源码内核定义"
+        cd "$OPENWRT_PATH" || { echo "❌ 进入源码目录失败"; exit 1; }
+        echo "配置文件内核版本：" && grep "CONFIG_KERNEL_VERSION" .config || echo "未找到内核配置"
+        echo "源码支持内核版本：" && grep "KERNEL_PATCHVER" "target/linux/${DEVICE_TARGET}/Makefile" || echo "未找到源码内核定义"
 
+    # 修复3：将 $OPENWRT_DIR 改为 $OPENWRT_PATH
     - name: Clean Toolchain Cache
       run: |
-        cd $OPENWRT_DIR
+        cd "$OPENWRT_PATH" || { echo "❌ 进入源码目录失败"; exit 1; }
         make toolchain/kernel-headers/clean
         make toolchain/clean
 
+    # 修复4：将 $OPENWRT_DIR 改为 $OPENWRT_PATH
     - name: Cache Toolchain
       if: env.CACHE_TOOLCHAIN == 'true'
       uses: HiGarfield/cachewrtbuild@main
       with:
         ccache: false
         mixkey: ${{ env.SOURCE_REPO }}-${{ env.REPO_BRANCH }}-${{ env.DEVICE_TARGET }}-${{ env.DEVICE_SUBTARGET }}
-        prefix: ${{ env.OPENWRT_DIR }}
+        prefix: ${{ env.OPENWRT_PATH }}
 
+    # 修复5：将 $OPENWRT_DIR 改为 $OPENWRT_PATH，路径加引号
     - name: Install Feeds (Force Update)
       run: |
-        [ ! -d "$OPENWRT_DIR" ] && echo "错误：源码目录不存在" && exit 1
-        cd $OPENWRT_DIR || { echo "无法进入源码目录"; exit 1; }
+        [ ! -d "$OPENWRT_PATH" ] && echo "错误：源码目录不存在" && exit 1
+        cd "$OPENWRT_PATH" || { echo "无法进入源码目录"; exit 1; }
         ./scripts/feeds clean && ./scripts/feeds update -a -f && ./scripts/feeds install -a -f
         echo "=== 验证ncurses ==="
         [ -d "package/libs/ncurses" ] && echo "✅ ncurses路径正确" || { echo "❌ ncurses缺失"; exit 1; }
         [ -d "feeds/packages/utils/pv" ] || { echo "⚠️ 安装pv包"; ./scripts/feeds install -p packages pv; }
 
+    # 修复6：将 $OPENWRT_DIR 改为 $OPENWRT_PATH，路径加引号
     - name: Confirm ncurses Path & Fix pcre
       run: |
-        cd $OPENWRT_DIR
+        cd "$OPENWRT_PATH" || { echo "❌ 进入源码目录失败"; exit 1; }
         NCURSES_PATH="package/libs/ncurses"
-        echo "NCURSES_PATH=$NCURSES_PATH" >> $GITHUB_ENV
+        echo "NCURSES_PATH=$NCURSES_PATH" >> "$GITHUB_ENV"
         echo "✅ ncurses路径：$NCURSES_PATH"
         PCRE_PATH="package/libs/pcre"
         if [ ! -d "$PCRE_PATH" ]; then
           echo "⚠️ 创建pcre包"
-          mkdir -p $PCRE_PATH
+          mkdir -p "$PCRE_PATH"
           printf '%s\n' \
             'include $(TOPDIR)/rules.mk' \
             '' \
@@ -315,10 +306,11 @@ jobs:
         fi
         echo "✅ pcre路径：$PCRE_PATH"
 
+    # 修复7：将 $OPENWRT_DIR 改为 $OPENWRT_PATH，路径加引号
     - name: Load Custom Configuration & Clean Invalid Dependencies
       run: |
-        cd $OPENWRT_DIR
-        [ -e "$GITHUB_WORKSPACE/files" ] && mv "$GITHUB_WORKSPACE/files" $OPENWRT_DIR/files || echo "⚠️ 无files目录"
+        cd "$OPENWRT_PATH" || { echo "❌ 进入源码目录失败"; exit 1; }
+        [ -e "$GITHUB_WORKSPACE/files" ] && mv "$GITHUB_WORKSPACE/files" "$OPENWRT_PATH/files" || echo "⚠️ 无files目录"
         DIY_SCRIPT_PATH="$GITHUB_WORKSPACE/$DIY_SCRIPT"
         if [ -f "$DIY_SCRIPT_PATH" ]; then
           chmod +x "$DIY_SCRIPT_PATH"
@@ -331,7 +323,7 @@ jobs:
         if [ -d "$PRESET_SCRIPTS_DIR" ]; then
           chmod +x "$PRESET_SCRIPTS_DIR"/*.sh
           echo "✅ 执行Clash内核预设"
-          "$PRESET_SCRIPTS_DIR/preset-clash-core.sh" $CLASH_KERNEL
+          "$PRESET_SCRIPTS_DIR/preset-clash-core.sh" "$CLASH_KERNEL"
           echo "✅ 执行终端工具预设"
           "$PRESET_SCRIPTS_DIR/preset-terminal-tools.sh"
         else
@@ -340,9 +332,10 @@ jobs:
         rm -rf $(find package/feeds/ -name "luci-app-msd_lite" -o -name "msd_lite")
         echo "✅ 清理冲突依赖完成"
 
+    # 修复8：将 $OPENWRT_DIR 改为 $OPENWRT_PATH
     - name: Enable Required Dependencies
       run: |
-        cd $OPENWRT_DIR
+        cd "$OPENWRT_PATH" || { echo "❌ 进入源码目录失败"; exit 1; }
         echo "CONFIG_PACKAGE_ncurses=y" >> .config
         echo "CONFIG_PACKAGE_ncursesw=y" >> .config
         echo "CONFIG_PACKAGE_libpcre=y" >> .config
@@ -352,91 +345,97 @@ jobs:
         grep "CONFIG_PACKAGE_ncursesw=y" .config && grep "CONFIG_PACKAGE_libpcre=y" .config || echo "⚠️ 依赖已添加"
         true
 
+    # 修复9：将 $OPENWRT_DIR 改为 $OPENWRT_PATH，sed命令删除多余逗号
     - name: Final Verify sed Before Compile
       run: |
-        cd $OPENWRT_DIR
-        STAGING_BIN_DIR="$OPENWRT_DIR/staging_dir/host/bin"
+        cd "$OPENWRT_PATH" || { echo "❌ 进入源码目录失败"; exit 1; }
+        STAGING_BIN_DIR="$OPENWRT_PATH/staging_dir/host/bin"
         echo "=== 编译前验证sed ==="
 
-        # 修复：用独立sed验证（保留你原版的验证步骤结构，仅修改sed验证逻辑）
-        sudo cp $INDEPENDENT_SED $STAGING_BIN_DIR/sed
-        echo "当前sed：$(ls -l $STAGING_BIN_DIR/sed)"
+        sudo cp "$INDEPENDENT_SED" "$STAGING_BIN_DIR/sed"
+        echo "当前sed：$(ls -l "$STAGING_BIN_DIR/sed")"
 
-        # 优化测试逻辑：简化内容+逗号分隔
         TEST_FILE=$(mktemp)
-        echo '/usr/local/' > $TEST_FILE
-        $STAGING_BIN_DIR/sed -i -e 's,/usr/local/,/test/path/,,' $TEST_FILE
+        echo '/usr/local/' > "$TEST_FILE"
+        # 修复：用|分隔，删除多余逗号
+        "$STAGING_BIN_DIR/sed" -i -e 's|/usr/local/|/test/path/|' "$TEST_FILE"
         echo "sed处理后内容："
-        cat $TEST_FILE
-        if grep -q '/test/path/' $TEST_FILE; then
+        cat "$TEST_FILE"
+        if grep -q '/test/path/' "$TEST_FILE"; then
           echo "✅ sed功能验证通过"
         else
           echo "❌ sed验证失败"
           exit 1
         fi
-        rm -f $TEST_FILE
+        rm -f "$TEST_FILE"
 
+    # 修复10：将 $OPENWRT_DIR 改为 $OPENWRT_PATH
     - name: Pre-Compile ncurses (Include ncursesw)
       run: |
-        cd $OPENWRT_DIR
+        cd "$OPENWRT_PATH" || { echo "❌ 进入源码目录失败"; exit 1; }
         echo "=== 预编译ncurses：$NCURSES_PATH ==="
-        make $NCURSES_PATH/compile V=s
+        make "$NCURSES_PATH/compile" V=s
         echo "=== 验证ncursesw ==="
         find staging_dir/target-*/ -name "libncursesw.so*"
         [ $? -eq 0 ] || { echo "❌ ncursesw编译失败"; exit 1; }
         echo "✅ ncurses预编译成功"
 
+    # 修复11：将 $OPENWRT_DIR 改为 $OPENWRT_PATH
     - name: Pre-Compile pv
       run: |
-        cd $OPENWRT_DIR
+        cd "$OPENWRT_PATH" || { echo "❌ 进入源码目录失败"; exit 1; }
         echo "=== 预编译pv ==="
         make package/feeds/packages/pv/compile V=s
         find bin/packages/*/*/ -name "pv-*.apk"
         [ $? -eq 0 ] || { echo "❌ pv编译失败"; exit 1; }
         echo "✅ pv预编译成功"
 
+    # 修复12：将 $OPENWRT_DIR 改为 $OPENWRT_PATH
     - name: Download Dependent Packages
       run: |
-        cd $OPENWRT_DIR
+        cd "$OPENWRT_PATH" || { echo "❌ 进入源码目录失败"; exit 1; }
         make defconfig
         make download -j8
         find dl -size -1024c -exec rm -f {} \;
         echo "✅ 依赖包下载完成"
 
+    # 修复13：将 $OPENWRT_DIR 改为 $OPENWRT_PATH
     - name: Compile Firmware
       id: compile
       run: |
-        cd $OPENWRT_DIR
-        mkdir -p files/etc/uci-defaults
-        cp $GITHUB_WORKSPACE/scripts/init-settings.sh files/etc/uci-defaults/99-init-settings
+        cd "$OPENWRT_PATH" || { echo "❌ 进入源码目录失败"; exit 1; }
+        mkdir -p "files/etc/uci-defaults"
+        cp "$GITHUB_WORKSPACE/scripts/init-settings.sh" "files/etc/uci-defaults/99-init-settings"
         echo "=== 用$(nproc)线程编译 ==="
         make -j$(nproc) V=s || make -j1 V=s
-        echo "status=success" >> $GITHUB_OUTPUT
-        echo "DATE=$(date +"%Y-%m-%d %H:%M:%S")" >> $GITHUB_ENV
-        echo "FILE_DATE=$(date +"%Y.%m.%d")" >> $GITHUB_ENV
+        echo "status=success" >> "$GITHUB_OUTPUT"
+        echo "DATE=$(date +"%Y-%m-%d %H:%M:%S")" >> "$GITHUB_ENV"
+        echo "FILE_DATE=$(date +"%Y.%m.%d")" >> "$GITHUB_ENV"
         echo "✅ 固件编译完成"
 
     - name: Check Disk Usage
       if: (!cancelled())
       run: df -hT
 
+    # 修复14：将 $OPENWRT_DIR 改为 $OPENWRT_PATH
     - name: Upload Bin Directory
       if: steps.compile.outputs.status == 'success' && env.UPLOAD_BIN_DIR == 'true'
       uses: actions/upload-artifact@main
       with:
         name: ${{ env.SOURCE_REPO }}-bin-${{ env.DEVICE_TARGET }}-${{ env.DEVICE_SUBTARGET }}-${{ env.FILE_DATE }}
-        path: ${{ env.OPENWRT_DIR }}/bin
+        path: ${{ env.OPENWRT_PATH }}/bin
 
+    # 修复15：将 $OPENWRT_DIR 改为 $OPENWRT_PATH，路径加引号
     - name: Organize Firmware Files
       if: steps.compile.outputs.status == 'success'
       run: |
-        cd $OPENWRT_DIR/bin/targets/*/*
+        cd "$OPENWRT_PATH/bin/targets/*/*" || { echo "❌ 进入固件目录失败"; exit 1; }
         cat sha256sums > firmware.sha256
-        cp $OPENWRT_DIR/.config build.config
-        mkdir -p packages && mv $OPENWRT_DIR/bin/packages/*/*/*.ipk packages/
+        cp "$OPENWRT_PATH/.config" build.config
+        mkdir -p packages && mv "$OPENWRT_PATH/bin/packages"/*/*/*.ipk packages/
         tar -zcf Packages.tar.gz packages/
         rm -rf packages feeds.buildinfo version.buildinfo
-        echo "FIRMWARE_PATH=$PWD" >> $GITHUB_ENV
+        echo "FIRMWARE_PATH=$PWD" >> "$GITHUB_ENV"
         echo "✅ 固件整理完成"
 
     - name: Upload Firmware to Artifact
@@ -501,11 +500,11 @@ jobs:
       id: download
       run: |
         FIRMWARE_DIR=/mnt/openwrt/bin/targets/armvirt/64
-        mkdir -p $FIRMWARE_DIR && cd $FIRMWARE_DIR
+        mkdir -p "$FIRMWARE_DIR" && cd "$FIRMWARE_DIR" || { echo "❌ 进入固件目录失败"; exit 1; }
         wget -q $(curl -s "https://api.github.com/repos/$GITHUB_REPOSITORY/releases" | grep "$FIRMWARE_TAG.*rootfs.tar.gz" | awk -F '"' '{print $4}')
-        echo "status=success" >> $GITHUB_OUTPUT
-        echo "DATE=$(date +"%Y-%m-%d %H:%M:%S")" >> $GITHUB_ENV
-        echo "DATE1=$(date +"%y.%m.%d")" >> $GITHUB_ENV
+        echo "status=success" >> "$GITHUB_OUTPUT"
+        echo "DATE=$(date +"%Y-%m-%d %H:%M:%S")" >> "$GITHUB_ENV"
+        echo "DATE1=$(date +"%y.%m.%d")" >> "$GITHUB_ENV"
 
     - name: Package OpenWrt for ARMvirt
       if: steps.download.outputs.status == 'success'
