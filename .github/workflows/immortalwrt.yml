@@ -131,10 +131,10 @@ jobs:
           echo "✅ 链接: $STAGING_BIN_DIR/$tool -> $TOOL_PATH"
         done
 
-    # 最终验证
-    echo -e "\n=== 最终验证工具 ==="
-    ls -l "$STAGING_BIN_DIR/libdeflate-gzip"
-    ls -l "$STAGING_BIN_DIR/sed"
+        # 最终验证
+        echo -e "\n=== 最终验证工具 ==="
+        ls -l "$STAGING_BIN_DIR/libdeflate-gzip"
+        ls -l "$STAGING_BIN_DIR/sed"
 
     - name: Combine Disks
       uses: easimon/maximize-build-space@master
