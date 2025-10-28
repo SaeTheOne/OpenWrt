@@ -88,25 +88,33 @@ jobs:
         mkdir -p "$STAGING_BIN_DIR"
         sudo chmod 777 "$STAGING_BIN_DIR"
     
+        # 处理sed（保持不变）
         echo "=== 单独处理 sed ==="
         sudo cp "$INDEPENDENT_SED" "$STAGING_BIN_DIR/sed"
         sudo chmod +x "$STAGING_BIN_DIR/sed"
         echo "✅ 强制复制独立sed: $STAGING_BIN_DIR/sed -> $INDEPENDENT_SED"
         "$STAGING_BIN_DIR/sed" --version || { echo "❌ sed复制失败"; exit 1; }
-
+    
+        # 修复：强化libdeflate-gzip的安装和链接
         echo "=== 单独处理 libdeflate-gzip ==="
-        if ! command -v libdeflate-gzip &> /dev/null; then
-          echo "⚠️ 强制安装 libdeflate-tools"
-          sudo apt-get -y update
-          sudo apt-get -y install --reinstall libdeflate-tools
-        fi
-        LIB_PATH=$(which libdeflate-gzip || which gzip)
+        # 强制安装libdeflate-tools（不检查是否已安装，确保存在）
+        sudo apt-get -y update
+        sudo apt-get -y install --reinstall libdeflate-tools
+        # 优先找libdeflate-gzip，找不到则用gzip替代
+        LIB_PATH=$(which libdeflate-gzip 2>/dev/null || which gzip 2>/dev/null)
         if [ -z "$LIB_PATH" ]; then
           echo "❌ 致命错误：既无 libdeflate-gzip 也无 gzip" && exit 1
         fi
+        # 强制创建链接（覆盖已有链接）
         sudo ln -sf "$LIB_PATH" "$STAGING_BIN_DIR/libdeflate-gzip"
         echo "✅ 强制链接: $STAGING_BIN_DIR/libdeflate-gzip -> $LIB_PATH"
+        # 验证链接是否有效
+        if [ ! -f "$STAGING_BIN_DIR/libdeflate-gzip" ]; then
+          echo "❌ libdeflate-gzip链接创建失败" && exit 1
+        fi
+        "$STAGING_BIN_DIR/libdeflate-gzip" --version || echo "⚠️ libdeflate-gzip版本检查警告（非致命）"
     
+        # 其他工具处理（保持不变）
         CORE_TOOLS=(
           grep awk cp mv rm tar gzip bzip2 xz make gcc g++ patch 
           perl python3 curl wget git diff find sort uniq cat chmod chown
@@ -122,11 +130,11 @@ jobs:
           sudo ln -sf "$TOOL_PATH" "$STAGING_BIN_DIR/$tool"
           echo "✅ 链接: $STAGING_BIN_DIR/$tool -> $TOOL_PATH"
         done
-    
-        echo -e "\n=== 最终验证工具 ==="
-        ls -l "$STAGING_BIN_DIR/libdeflate-gzip"
-        ls -l "$STAGING_BIN_DIR/sed"
-        "$STAGING_BIN_DIR/sed" --version
+
+    # 最终验证
+    echo -e "\n=== 最终验证工具 ==="
+    ls -l "$STAGING_BIN_DIR/libdeflate-gzip"
+    ls -l "$STAGING_BIN_DIR/sed"
 
     - name: Combine Disks
       uses: easimon/maximize-build-space@master
@@ -137,9 +145,6 @@ jobs:
         remove-dotnet: true
         remove-android: true
         remove-haskell: true
-        exclude-paths: |  # 新增：避免误删sed和工作目录
-          /home/runner/work/OpenWrt/OpenWrt
-          ${{ env.INDEPENDENT_SED }}
 
     - name: Checkout
       uses: actions/checkout@main
