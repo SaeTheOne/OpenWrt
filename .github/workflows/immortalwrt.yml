@@ -205,30 +205,30 @@ jobs:
         echo "✅ scripts/feeds验证通过"
 
     - name: Verify Compile Directory
-  run: |
-    echo "源码路径：$OPENWRT_PATH"  # 修正为 OPENWRT_PATH
-    echo "=== 目录权限 ===" && ls -ld $OPENWRT_PATH  # 修正为 OPENWRT_PATH
-    echo "=== 剩余空间 ===" && df -hT $OPENWRT_PATH  # 修正为 OPENWRT_PATH
-
-    - name: Fix Source Code Integrity
       run: |
-        # 增加目录存在性和Git仓库验证
-        if [ ! -d "$OPENWRT_PATH" ]; then
-          echo "❌ 源码目录 $OPENWRT_PATH 不存在"
-          exit 1
-        fi
-        cd $OPENWRT_PATH  # 修正为 OPENWRT_PATH
-        # 验证是否为Git仓库
-        if [ ! -d ".git" ]; then
-          echo "❌ 不是Git仓库，重新克隆源码"
-          cd ..
-          rm -rf openwrt
-          git clone $REPO_URL -b $REPO_BRANCH openwrt
-          cd openwrt
-          echo "OPENWRT_PATH=$PWD" >> $GITHUB_ENV
-        fi
-        git submodule update --init --recursive
-        git fetch --all && git reset --hard origin/$REPO_BRANCH
+        echo "源码路径：$OPENWRT_PATH"  # 修正为 OPENWRT_PATH
+        echo "=== 目录权限 ===" && ls -ld $OPENWRT_PATH  # 修正为 OPENWRT_PATH
+        echo "=== 剩余空间 ===" && df -hT $OPENWRT_PATH  # 修正为 OPENWRT_PATH
+    
+        - name: Fix Source Code Integrity
+          run: |
+            # 增加目录存在性和Git仓库验证
+            if [ ! -d "$OPENWRT_PATH" ]; then
+              echo "❌ 源码目录 $OPENWRT_PATH 不存在"
+              exit 1
+            fi
+            cd $OPENWRT_PATH  # 修正为 OPENWRT_PATH
+            # 验证是否为Git仓库
+            if [ ! -d ".git" ]; then
+              echo "❌ 不是Git仓库，重新克隆源码"
+              cd ..
+              rm -rf openwrt
+              git clone $REPO_URL -b $REPO_BRANCH openwrt
+              cd openwrt
+              echo "OPENWRT_PATH=$PWD" >> $GITHUB_ENV
+            fi
+            git submodule update --init --recursive
+            git fetch --all && git reset --hard origin/$REPO_BRANCH
 
     - name: Generate Variables
       id: variable
