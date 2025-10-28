@@ -157,14 +157,26 @@ jobs:
       run: |
         echo "=== 工作目录空间 ==="
         df -hT /home/runner/work/OpenWrt/OpenWrt
+        # 1. 克隆源码（保持你原版逻辑）
         git clone $REPO_URL -b $REPO_BRANCH /home/runner/work/OpenWrt/OpenWrt/openwrt
         cd /home/runner/work/OpenWrt/OpenWrt/openwrt
         echo "OPENWRT_PATH=$PWD" >> $GITHUB_ENV
-        # 重新部署sed（保持原版逻辑）
+        # 2. 修复：检查并兜底创建独立sed（核心新增逻辑）
         STAGING_BIN_DIR="$PWD/staging_dir/host/bin"
+        # 先确保独立sed路径存在且文件可用
+        if [ ! -f "$INDEPENDENT_SED" ]; then
+          echo "⚠️ 独立sed文件不存在，紧急兜底创建"
+          # 直接从系统复制sed（绕过之前的部署步骤，确保可用）
+          sudo cp $(which sed) $INDEPENDENT_SED
+          sudo chmod +x $INDEPENDENT_SED
+          echo "✅ 兜底创建独立sed：$INDEPENDENT_SED"
+        fi
+        # 3. 再复制sed到staging目录（保持你原版逻辑）
+        mkdir -p $STAGING_BIN_DIR  # 确保staging目录存在
         sudo cp $INDEPENDENT_SED $STAGING_BIN_DIR/sed
+        sudo chmod +x $STAGING_BIN_DIR/sed
         echo "✅ 克隆后重新部署sed: $STAGING_BIN_DIR/sed"
-        # 提取提交信息（保持原版逻辑）
+        # 4. 提取提交信息（完全保持你原版逻辑）
         COMMIT_AUTHOR=$(git show -s --date=short --format="作者: %an")
         echo "COMMIT_AUTHOR=$COMMIT_AUTHOR" >> $GITHUB_ENV && echo "COMMIT_AUTHOR=$COMMIT_AUTHOR" >> $GITHUB_OUTPUT
         COMMIT_DATE=$(git show -s --date=short --format="时间: %ci")
@@ -175,6 +187,7 @@ jobs:
         echo "COMMIT_HASH=$COMMIT_HASH" >> $GITHUB_ENV && echo "COMMIT_HASH=$COMMIT_HASH" >> $GITHUB_OUTPUT
         echo "=== 源码目录权限 ==="
         ls -ld /home/runner/work/OpenWrt/OpenWrt/openwrt
+        
 
     - name: Verify Essential Scripts Exist
       run: |
