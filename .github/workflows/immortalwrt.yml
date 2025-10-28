@@ -85,41 +85,51 @@ jobs:
     - name: Fix All System Tools Path
       run: |
         STAGING_BIN_DIR="/home/runner/work/OpenWrt/OpenWrt/openwrt/staging_dir/host/bin"
+        # 确保目录存在且有权限（关键：避免目录缺失导致链接失败）
         mkdir -p "$STAGING_BIN_DIR"
         sudo chmod 777 "$STAGING_BIN_DIR"
+        echo "✅ 确保staging目录存在：$STAGING_BIN_DIR"
     
         # 处理sed（保持不变）
         echo "=== 单独处理 sed ==="
         sudo cp "$INDEPENDENT_SED" "$STAGING_BIN_DIR/sed"
         sudo chmod +x "$STAGING_BIN_DIR/sed"
-        echo "✅ 强制复制独立sed: $STAGING_BIN_DIR/sed -> $INDEPENDENT_SED"
         "$STAGING_BIN_DIR/sed" --version || { echo "❌ sed复制失败"; exit 1; }
     
-        # 修复：强化libdeflate-gzip的安装和链接
-        echo "=== 单独处理 libdeflate-gzip ==="
-        # 强制安装libdeflate-tools（不检查是否已安装，确保存在）
-        sudo apt-get -y update
-        sudo apt-get -y install --reinstall libdeflate-tools
-        # 优先找libdeflate-gzip，找不到则用gzip替代
+        # 核心修复：用gzip作为保底，确保工具存在
+        echo "=== 强制处理 libdeflate-gzip/gzip ==="
+        # 1. 优先检查libdeflate-gzip，不存在则安装
+        if ! command -v libdeflate-gzip &> /dev/null; then
+          echo "⚠️ 安装libdeflate-tools"
+          sudo apt-get -y update
+          sudo apt-get -y install libdeflate-tools
+        fi
+        # 2. 获取实际工具路径（libdeflate-gzip优先，否则用系统gzip）
         LIB_PATH=$(which libdeflate-gzip 2>/dev/null || which gzip 2>/dev/null)
         if [ -z "$LIB_PATH" ]; then
-          echo "❌ 致命错误：既无 libdeflate-gzip 也无 gzip" && exit 1
+          echo "❌ 致命错误：未找到libdeflate-gzip和gzip" && exit 1
         fi
-        # 强制创建链接（覆盖已有链接）
+        echo "✅ 找到压缩工具：$LIB_PATH"
+        # 3. 强制创建链接（先删除旧链接，避免冲突）
+        sudo rm -f "$STAGING_BIN_DIR/libdeflate-gzip"  # 清理可能的无效链接
         sudo ln -sf "$LIB_PATH" "$STAGING_BIN_DIR/libdeflate-gzip"
-        echo "✅ 强制链接: $STAGING_BIN_DIR/libdeflate-gzip -> $LIB_PATH"
-        # 验证链接是否有效
-        if [ ! -f "$STAGING_BIN_DIR/libdeflate-gzip" ]; then
-          echo "❌ libdeflate-gzip链接创建失败" && exit 1
+        # 4. 验证链接有效性（必须可执行）
+        if [ ! -x "$STAGING_BIN_DIR/libdeflate-gzip" ]; then
+          echo "❌ 链接失败：$STAGING_BIN_DIR/libdeflate-gzip 不可执行" && exit 1
         fi
-        "$STAGING_BIN_DIR/libdeflate-gzip" --version || echo "⚠️ libdeflate-gzip版本检查警告（非致命）"
+        echo "✅ 链接成功：$(ls -l "$STAGING_BIN_DIR/libdeflate-gzip")"
+        # 5. 验证工具功能（解压测试）
+        TEST_FILE=$(mktemp)
+        echo "test" | gzip > "$TEST_FILE.gz"
+        if "$STAGING_BIN_DIR/libdeflate-gzip" -dc "$TEST_FILE.gz" | grep -q "test"; then
+          echo "✅ 压缩工具功能验证通过"
+        else
+          echo "❌ 压缩工具功能验证失败" && exit 1
+        fi
+        rm -f "$TEST_FILE" "$TEST_FILE.gz"
     
         # 其他工具处理（保持不变）
-        CORE_TOOLS=(
-          grep awk cp mv rm tar gzip bzip2 xz make gcc g++ patch 
-          perl python3 curl wget git diff find sort uniq cat chmod chown
-          mkdir rmdir ln echo printf date expr test
-        )
+        CORE_TOOLS=(grep awk cp mv rm tar gzip bzip2 xz make gcc g++ patch perl python3 curl wget git diff find sort uniq cat chmod chown mkdir rmdir ln echo printf date expr test)
         for tool in "${CORE_TOOLS[@]}"; do
           TOOL_PATH=$(which "$tool" 2>/dev/null)
           if [ -z "$TOOL_PATH" ]; then
@@ -130,11 +140,6 @@ jobs:
           sudo ln -sf "$TOOL_PATH" "$STAGING_BIN_DIR/$tool"
           echo "✅ 链接: $STAGING_BIN_DIR/$tool -> $TOOL_PATH"
         done
-
-        # 最终验证
-        echo -e "\n=== 最终验证工具 ==="
-        ls -l "$STAGING_BIN_DIR/libdeflate-gzip"
-        ls -l "$STAGING_BIN_DIR/sed"
 
     - name: Combine Disks
       uses: easimon/maximize-build-space@master
@@ -374,6 +379,34 @@ jobs:
         fi
         rm -f "$TEST_FILE"
 
+    - name: Verify libdeflate-gzip Before ncurses Compile
+      run: |
+        cd "$OPENWRT_PATH" || { echo "❌ 进入源码目录失败"; exit 1; }
+        STAGING_BIN_DIR="$OPENWRT_PATH/staging_dir/host/bin"
+        echo "=== 预编译ncurses前验证libdeflate-gzip ==="
+        # 检查链接是否存在
+        if [ ! -f "$STAGING_BIN_DIR/libdeflate-gzip" ]; then
+          echo "❌ 未找到libdeflate-gzip，紧急创建链接"
+          # 直接用系统gzip兜底
+          LIB_PATH=$(which gzip)
+          sudo ln -sf "$LIB_PATH" "$STAGING_BIN_DIR/libdeflate-gzip"
+        fi
+        # 检查是否可执行
+        if [ ! -x "$STAGING_BIN_DIR/libdeflate-gzip" ]; then
+          echo "❌ libdeflate-gzip不可执行，修复权限"
+          sudo chmod +x "$STAGING_BIN_DIR/libdeflate-gzip"
+        fi
+        # 最终功能测试
+        "$STAGING_BIN_DIR/libdeflate-gzip" --version || { echo "❌ 工具无效"; exit 1; }
+        echo "✅ 预编译前验证通过"
+
+- name: Pre-Compile ncurses (Include ncursesw)
+  run: |
+    cd "$OPENWRT_PATH" || { echo "❌ 进入源码目录失败"; exit 1; }
+    echo "=== 预编译ncurses：$NCURSES_PATH ==="
+    make "$NCURSES_PATH/compile" V=s
+    # ...（其余保持不变）
+    
     # 修复10：将 $OPENWRT_DIR 改为 $OPENWRT_PATH
     - name: Pre-Compile ncurses (Include ncursesw)
       run: |
